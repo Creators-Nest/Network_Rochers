@@ -1,0 +1,9 @@
+# NoC Simulator Framework Requirements
+
+# Core dependencies
+tkinter-tooltip>=2.1.0
+
+# For future enhancements (optional)
+# matplotlib>=3.7.0
+# numpy>=1.24.0
+# pandas>=2.0.0

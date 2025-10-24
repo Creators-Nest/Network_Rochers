@@ -1,0 +1,32 @@
+The buffer system in this Network-on-Chip (NoC) router, typically used in **Mesh/Torus** topologies, functions as temporary storage to manage **data flow** and **contention**.
+
+Here is the concise, step-by-step process for a packet's journey through the router:
+
+***
+
+## 1. Reception and Input
+
+1.  **Receive:** An incoming data unit (**flit**) arrives, and the **Recieve Bit** is asserted.
+2.  **Buffer:** The flit is stored in a slot in the circular **Recieve Buffer** (a FIFO queue).
+
+***
+
+## 2. Routing and Decision
+
+1.  **Route:** The **Routing Logic** reads the destination address (from the header flit) and determines the correct **output port** (next router) based on the topology and routing algorithm (e.g., XY routing).
+2.  **Request:** The **Control Logic** sends a **Request ($\text{REQ}$)** signal to the downstream router's input port for the determined output port, asking for space.
+
+***
+
+## 3. Transmission and Flow Control
+
+1.  **Acknowledge:** The downstream router, if it has buffer space, sends an **Acknowledge ($\text{ACK}$)** signal back.
+2.  **Arbitrate:** If multiple inputs $\text{REQ}$ the same output, the **Control Logic** selects one flit (arbitration).
+3.  **Transfer:** The selected flit moves from the **Recieve Buffer** to the **Recieve Register** and is sent across the link using the **DATA** lines, synchronized by the **CLK** signal. The **Transfer Bit** is asserted during this movement.
+
+***
+
+## 4. Local Interaction and Congestion
+
+1.  **Local Access:** The **Application Logic** handles local data. It **injects** packets from the local core into the **Send Register** then the **Send Buffer** for transmission, or **ejects** packets from the **Recieve Buffer** that have reached their final destination.
+2.  **Congestion:** If the **Recieve Buffer** is nearly full, the router asserts the **Choke** signal back to the upstream router, temporarily stopping incoming traffic to prevent overflow and maintain **backpressure flow control**.
