@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # NoC Simulator Framework
 
 Network-on-Chip (NoC) Simulation Framework for visualizing and analyzing packet transfer across different topologies.
@@ -52,3 +53,10 @@ Network_Rochers/
 ## Authors
 
 Network_Rochers Team - REVA University
+=======
+Repository contianing intial working prototypes of the 4 Network On Chip Topologies:
+* Mesh (Handeled by Giridharan and Akarsh)
+* Torus (Handeled by David and Darshan)
+* RiCoBiT (Handeled By Akarsh and Darshan)
+* Adaptive -RiCoBiT (Joint Contribution)
+>>>>>>> 48be702f2bf683c3cde44e9ada36cc1a40d43dc6
