@@ -139,6 +139,21 @@ class Node:
         """Check if neighbor exists in direction"""
         return self.neighbors.get(direction) is not None
     
+    def get_neighbor_position(self, direction: Direction) -> Optional[Tuple[int, int]]:
+        """
+        Get the position of neighbor in given direction
+        
+        Args:
+            direction: Direction to check
+            
+        Returns:
+            Position tuple (row, col) of neighbor, or None if no neighbor
+        """
+        neighbor = self.neighbors.get(direction)
+        if neighbor:
+            return neighbor.position
+        return None
+    
     def get_available_directions(self) -> List[Direction]:
         """Get list of directions with valid neighbors"""
         return [d for d, n in self.neighbors.items() if n is not None]
