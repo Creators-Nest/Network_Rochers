@@ -15,6 +15,15 @@ class PacketStatus(Enum):
     DROPPED = "dropped"
 
 
+class PacketType(Enum):
+    """Packet type enumeration for AODV protocol"""
+    DATA = "data"           # Regular data packet
+    RREQ = "rreq"          # Route Request
+    RREP = "rrep"          # Route Reply
+    RERR = "rerr"          # Route Error
+    HELLO = "hello"        # Hello message
+
+
 class Packet:
     """
     Universal packet structure for all NoC topologies
@@ -33,6 +42,7 @@ class Packet:
     """
     
     _packet_counter = 0  # Class variable for unique packet IDs
+    _broadcast_id_counter = 0  # Counter for RREQ broadcast IDs
     
     def __init__(
         self,
@@ -40,7 +50,8 @@ class Packet:
         destination: Tuple[int, int],
         payload: any = None,
         creation_time: int = 0,
-        priority: int = 0
+        priority: int = 0,
+        packet_type: 'PacketType' = None
     ):
         """
         Initialize a new packet
@@ -51,6 +62,7 @@ class Packet:
             payload: Data payload
             creation_time: Clock cycle when created
             priority: Packet priority level
+            packet_type: Type of packet (DATA, RREQ, RREP, etc.)
         """
         Packet._packet_counter += 1
         self.packet_id = Packet._packet_counter
@@ -68,9 +80,24 @@ class Packet:
         self.status = PacketStatus.CREATED
         self.priority = priority
         
+        # Packet type for AODV protocol
+        from .packet import PacketType
+        self.packet_type = packet_type if packet_type else PacketType.DATA
+        
+        # AODV-specific fields
+        self.broadcast_id: Optional[int] = None
+        self.source_sequence_num: int = 0
+        self.dest_sequence_num: int = 0
+        self.hop_count: int = 0
+        
         # For visualization and debugging
         self.current_node: Optional[Tuple[int, int]] = source
         self.next_node: Optional[Tuple[int, int]] = None
+        
+        # Flow control flags
+        self.waiting_for_ack = False
+        self.req_sent = False
+        self.ack_received = False
     
     def add_hop(self, node: Tuple[int, int], current_time: int):
         """
@@ -121,6 +148,39 @@ class Packet:
     def is_at_destination(self) -> bool:
         """Check if packet has reached its destination"""
         return self.current_node == self.destination
+    
+    @classmethod
+    def create_rreq(cls, source: Tuple[int, int], destination: Tuple[int, int], 
+                    source_seq: int, dest_seq: int, current_time: int) -> 'Packet':
+        """Create a Route Request (RREQ) packet"""
+        cls._broadcast_id_counter += 1
+        rreq = cls(
+            source=source,
+            destination=destination,
+            payload={"type": "RREQ"},
+            creation_time=current_time,
+            packet_type=PacketType.RREQ
+        )
+        rreq.broadcast_id = cls._broadcast_id_counter
+        rreq.source_sequence_num = source_seq
+        rreq.dest_sequence_num = dest_seq
+        rreq.hop_count = 0
+        return rreq
+    
+    @classmethod
+    def create_rrep(cls, source: Tuple[int, int], destination: Tuple[int, int],
+                    dest_seq: int, hop_count: int, current_time: int) -> 'Packet':
+        """Create a Route Reply (RREP) packet"""
+        rrep = cls(
+            source=source,
+            destination=destination,
+            payload={"type": "RREP"},
+            creation_time=current_time,
+            packet_type=PacketType.RREP
+        )
+        rrep.dest_sequence_num = dest_seq
+        rrep.hop_count = hop_count
+        return rrep
     
     def __repr__(self) -> str:
         """String representation of packet"""

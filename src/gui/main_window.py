@@ -48,7 +48,7 @@ class MainWindow:
     
     def _create_header(self):
         """Create header with title and topology selector"""
-        header_frame = tk.Frame(self.root, bg="#2c3e50", height=60)
+        header_frame = tk.Frame(self.root, bg="#ffffff", height=60)
         header_frame.pack(side=tk.TOP, fill=tk.X)
         header_frame.pack_propagate(False)
         
@@ -57,21 +57,21 @@ class MainWindow:
             header_frame,
             text="Network-on-Chip Simulator",
             font=("Arial", 20, "bold"),
-            bg="#2c3e50",
-            fg="white"
+            bg="#FFFFFF",
+            fg="black"
         )
         title_label.pack(side=tk.LEFT, padx=20, pady=10)
         
         # Topology selector
-        selector_frame = tk.Frame(header_frame, bg="#2c3e50")
+        selector_frame = tk.Frame(header_frame, bg="#ffffff")
         selector_frame.pack(side=tk.RIGHT, padx=20)
         
         tk.Label(
             selector_frame,
             text="Topology:",
             font=("Arial", 12),
-            bg="#2c3e50",
-            fg="white"
+            bg="#ffffff",
+            fg="black"
         ).pack(side=tk.LEFT, padx=(0, 10))
         
         self.topology_var = tk.StringVar(value="Mesh")
@@ -93,7 +93,7 @@ class MainWindow:
     
     def _create_status_bar(self):
         """Create status bar at bottom"""
-        status_frame = tk.Frame(self.root, bg="#34495e", height=30)
+        status_frame = tk.Frame(self.root, bg="#ffffff", height=30)
         status_frame.pack(side=tk.BOTTOM, fill=tk.X)
         status_frame.pack_propagate(False)
         
@@ -101,8 +101,8 @@ class MainWindow:
             status_frame,
             text="Ready",
             font=("Arial", 10),
-            bg="#34495e",
-            fg="white",
+            bg="#ffffff",
+            fg="black",
             anchor=tk.W
         )
         self.status_label.pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
