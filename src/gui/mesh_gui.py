@@ -59,6 +59,14 @@ class MeshTopologyGUI:
         self.simulation_step = 0
         self.current_packet: Optional[Packet] = None
         self.packet_data = ""  # User-provided packet data
+        self.active_packets: List[Packet] = []  # Support multiple packets
+        self.packet_id_counter = 0  # Unique ID for each packet
+        
+        # Hover state for node expansion
+        self.hover_node: Optional[Tuple[int, int]] = None
+        self.hover_timer = None
+        self.hover_delay = 2000  # 2 seconds in milliseconds
+        self.expanded_node: Optional[Tuple[int, int]] = None
         
         # Colors
         self.colors = {
@@ -553,6 +561,8 @@ Controls Guide:
         # Bind events
         self.canvas.bind("<Button-1>", self.on_canvas_click)
         self.canvas.bind("<Configure>", self.on_canvas_resize)
+        self.canvas.bind("<Motion>", self.on_canvas_hover)
+        self.canvas.bind("<Leave>", self.on_canvas_leave)
         
         # Draw initial network
         self.draw_network()
@@ -608,13 +618,28 @@ Controls Guide:
         if canvas_height <= 1:
             canvas_height = 600
         
-        # Calculate spacing
-        margin = 100
+        # Calculate spacing with better handling for large grids
+        margin = 80  # Reduced margin for large grids
+        
+        # Adjust margin based on grid size
+        if max(self.rows, self.cols) > 20:
+            margin = 50
+        elif max(self.rows, self.cols) > 30:
+            margin = 30
+        
         available_width = canvas_width - 2 * margin
         available_height = canvas_height - 2 * margin
         
-        spacing_x = available_width / max(1, self.cols - 1) if self.cols > 1 else available_width
-        spacing_y = available_height / max(1, self.rows - 1) if self.rows > 1 else available_height
+        # Better spacing calculation to prevent division issues
+        if self.cols > 1:
+            spacing_x = available_width / (self.cols - 1)
+        else:
+            spacing_x = available_width / 2
+            
+        if self.rows > 1:
+            spacing_y = available_height / (self.rows - 1)
+        else:
+            spacing_y = available_height / 2
         
         # Auto-adjust node radius based on grid size
         if self.auto_adjust_size:
@@ -623,18 +648,25 @@ Controls Guide:
             if max_nodes <= 5:
                 self.node_radius = 25
             elif max_nodes <= 10:
-                self.node_radius = 20
-            elif max_nodes <= 20:
+                self.node_radius = 18
+            elif max_nodes <= 15:
                 self.node_radius = 12
+            elif max_nodes <= 20:
+                self.node_radius = 10
             elif max_nodes <= 30:
-                self.node_radius = 8
-            else:
+                self.node_radius = 7
+            elif max_nodes <= 40:
                 self.node_radius = 5
+            else:  # 41-50
+                self.node_radius = 4
             
-            # Also adjust based on spacing
+            # Also adjust based on spacing to prevent overlap
             min_spacing = min(spacing_x, spacing_y)
-            optimal_radius = min_spacing / 3
+            optimal_radius = min_spacing / 2.5  # Leave some gap between nodes
             self.node_radius = min(self.node_radius, optimal_radius)
+            
+            # Ensure minimum visible size
+            self.node_radius = max(self.node_radius, 3)
         
         # Draw connections first (so they appear behind nodes)
         for row in range(self.rows):
@@ -664,13 +696,18 @@ Controls Guide:
                         tags="connection"
                     )
         
-        # Draw nodes
+        # Draw nodes (now as squares)
         for row in range(self.rows):
             for col in range(self.cols):
+                # Check if node exists before accessing
+                if (row, col) not in self.nodes:
+                    continue
+                
                 x = margin + col * spacing_x * self.zoom_level + self.offset_x
                 y = margin + row * spacing_y * self.zoom_level + self.offset_y
                 
                 # Determine node color
+                node = self.nodes[(row, col)]
                 if (row, col) == self.source_node:
                     color = self.colors['node_source']
                 elif (row, col) == self.dest_node:
@@ -680,11 +717,11 @@ Controls Guide:
                 else:
                     color = self.colors['node_normal']
                 
-                # Draw node circle
-                radius = self.node_radius * self.zoom_level
-                self.canvas.create_oval(
-                    x - radius, y - radius,
-                    x + radius, y + radius,
+                # Draw node as SQUARE instead of circle
+                size = self.node_radius * self.zoom_level
+                self.canvas.create_rectangle(
+                    x - size, y - size,
+                    x + size, y + size,
                     fill=color,
                     outline=self.colors['text'],
                     width=2,
@@ -705,30 +742,50 @@ Controls Guide:
                 if not node.input_buffer.is_empty() or not node.output_buffer.is_empty():
                     buffer_text = f"I:{node.input_buffer.size()} O:{node.output_buffer.size()}"
                     self.canvas.create_text(
-                        x, y + radius + 15,
+                        x, y + size + 15,
                         text=buffer_text,
                         fill=self.colors['text'],
                         font=("Arial", int(8 * self.zoom_level)),
                         tags=f"buffer_{row}_{col}"
                     )
         
-        # Draw current packet path if exists
-        if self.current_packet and len(self.current_packet.path) > 1:
-            self.draw_packet_path(self.current_packet)
+        # Draw expanded node details if hovering
+        if self.expanded_node:
+            self.draw_expanded_node(self.expanded_node, margin, spacing_x, spacing_y)
+        
+        # Draw all active packet paths (support multiple packets)
+        for packet in self.active_packets:
+            if packet.status != PacketStatus.DELIVERED and len(packet.path) > 1:
+                self.draw_packet_path(packet)
     
     def draw_packet_path(self, packet: Packet):
-        """Draw the packet's path on the canvas"""
-        margin = 100
+        """Draw the packet's path on the canvas as spears/arrows"""
+        margin = 80
+        
+        # Adjust margin based on grid size
+        if max(self.rows, self.cols) > 20:
+            margin = 50
+        elif max(self.rows, self.cols) > 30:
+            margin = 30
+        
         canvas_width = self.canvas.winfo_width() or 800
         canvas_height = self.canvas.winfo_height() or 600
         
         available_width = canvas_width - 2 * margin
         available_height = canvas_height - 2 * margin
         
-        spacing_x = available_width / max(1, self.cols - 1) if self.cols > 1 else available_width
-        spacing_y = available_height / max(1, self.rows - 1) if self.rows > 1 else available_height
+        # Better spacing calculation
+        if self.cols > 1:
+            spacing_x = available_width / (self.cols - 1)
+        else:
+            spacing_x = available_width / 2
+            
+        if self.rows > 1:
+            spacing_y = available_height / (self.rows - 1)
+        else:
+            spacing_y = available_height / 2
         
-        # Draw path
+        # Draw path as spear-like arrows
         for i in range(len(packet.path) - 1):
             row1, col1 = packet.path[i]
             row2, col2 = packet.path[i + 1]
@@ -738,25 +795,34 @@ Controls Guide:
             x2 = margin + col2 * spacing_x * self.zoom_level + self.offset_x
             y2 = margin + row2 * spacing_y * self.zoom_level + self.offset_y
             
+            # Draw spear-like arrow with larger arrowhead
             self.canvas.create_line(
                 x1, y1, x2, y2,
                 fill=self.colors['packet'],
-                width=4,
+                width=3,
                 arrow=tk.LAST,
-                arrowshape=(10, 12, 5),
+                arrowshape=(15, 20, 6),  # Larger, spear-like arrowhead
                 tags="packet_path"
             )
         
-        # Draw packet at current position
+        # Draw packet at current position as a spear/diamond shape
         if packet.current_node:
             row, col = packet.current_node
             x = margin + col * spacing_x * self.zoom_level + self.offset_x
             y = margin + row * spacing_y * self.zoom_level + self.offset_y
             
-            radius = self.node_radius * self.zoom_level * 0.3
-            self.canvas.create_oval(
-                x - radius, y - radius,
-                x + radius, y + radius,
+            size = self.node_radius * self.zoom_level * 0.4
+            
+            # Draw diamond/spear shape for current packet
+            points = [
+                x, y - size * 1.5,      # Top point (spear tip)
+                x + size * 0.6, y,      # Right
+                x, y + size * 0.8,      # Bottom
+                x - size * 0.6, y       # Left
+            ]
+            
+            self.canvas.create_polygon(
+                points,
                 fill=self.colors['packet'],
                 outline="white",
                 width=2,
@@ -789,28 +855,334 @@ Controls Guide:
     
     def find_node_at_position(self, x: int, y: int) -> Optional[Tuple[int, int]]:
         """Find node at given canvas position"""
-        margin = 100
+        margin = 80
+        
+        # Adjust margin based on grid size
+        if max(self.rows, self.cols) > 20:
+            margin = 50
+        elif max(self.rows, self.cols) > 30:
+            margin = 30
+        
         canvas_width = self.canvas.winfo_width() or 800
         canvas_height = self.canvas.winfo_height() or 600
         
         available_width = canvas_width - 2 * margin
         available_height = canvas_height - 2 * margin
         
-        spacing_x = available_width / max(1, self.cols - 1) if self.cols > 1 else available_width
-        spacing_y = available_height / max(1, self.rows - 1) if self.rows > 1 else available_height
+        # Better spacing calculation
+        if self.cols > 1:
+            spacing_x = available_width / (self.cols - 1)
+        else:
+            spacing_x = available_width / 2
+            
+        if self.rows > 1:
+            spacing_y = available_height / (self.rows - 1)
+        else:
+            spacing_y = available_height / 2
         
-        radius = self.node_radius * self.zoom_level
+        size = self.node_radius * self.zoom_level
         
         for row in range(self.rows):
             for col in range(self.cols):
                 node_x = margin + col * spacing_x * self.zoom_level + self.offset_x
                 node_y = margin + row * spacing_y * self.zoom_level + self.offset_y
                 
-                distance = math.sqrt((x - node_x)**2 + (y - node_y)**2)
-                if distance <= radius:
+                # Check if point is inside square node
+                if (node_x - size <= x <= node_x + size and 
+                    node_y - size <= y <= node_y + size):
                     return (row, col)
         
         return None
+    
+    def on_canvas_hover(self, event):
+        """Handle mouse hover over canvas"""
+        hovered_node = self.find_node_at_position(event.x, event.y)
+        
+        if hovered_node != self.hover_node:
+            # Cancel previous timer
+            if self.hover_timer:
+                self.canvas.after_cancel(self.hover_timer)
+                self.hover_timer = None
+            
+            # Clear expansion if hovering away
+            if hovered_node is None and self.expanded_node:
+                self.expanded_node = None
+                self.draw_network()
+            
+            self.hover_node = hovered_node
+            
+            # Start new timer if hovering over a node
+            if self.hover_node:
+                self.hover_timer = self.canvas.after(
+                    self.hover_delay, 
+                    lambda: self.expand_node(self.hover_node)
+                )
+    
+    def on_canvas_leave(self, event):
+        """Handle mouse leaving canvas"""
+        if self.hover_timer:
+            self.canvas.after_cancel(self.hover_timer)
+            self.hover_timer = None
+        
+        self.hover_node = None
+        if self.expanded_node:
+            self.expanded_node = None
+            self.draw_network()
+    
+    def expand_node(self, node_pos: Tuple[int, int]):
+        """Expand node to show detailed router information"""
+        if node_pos and node_pos in self.nodes:
+            self.expanded_node = node_pos
+            self.draw_network()
+    
+    def draw_expanded_node(self, node_pos: Tuple[int, int], margin: int, 
+                          spacing_x: float, spacing_y: float):
+        """Draw expanded node with detailed router information (as per image)"""
+        row, col = node_pos
+        node = self.nodes[node_pos]
+        
+        # Calculate base position
+        x = margin + col * spacing_x * self.zoom_level + self.offset_x
+        y = margin + row * spacing_y * self.zoom_level + self.offset_y
+        
+        # Expanded size (larger than normal) - INCREASED SIZE
+        exp_width = 280
+        exp_height = 300
+        
+        # Draw expanded background
+        self.canvas.create_rectangle(
+            x - exp_width/2, y - exp_height/2,
+            x + exp_width/2, y + exp_height/2,
+            fill="#2c3e50",
+            outline="#e74c3c",
+            width=3,
+            tags="expanded_node"
+        )
+        
+        # Title
+        self.canvas.create_text(
+            x, y - exp_height/2 + 15,
+            text=f"Router Node ({row},{col})",
+            fill="white",
+            font=("Arial", 10, "bold"),
+            tags="expanded_node"
+        )
+        
+        # Draw signal indicators at top (REQ, ACK, DATA, CLK, Choke)
+        signal_y = y - exp_height/2 + 35
+        signals = [
+            ("REQ", node.input_buffer.size() > 0),
+            ("ACK", not node.input_buffer.is_full()),
+            ("DATA", node.output_buffer.size() > 0),
+            ("CLK", True),
+            ("Choke", node.input_buffer.size() >= node.input_buffer.capacity * 0.8)
+        ]
+        
+        signal_spacing = 35
+        start_x = x - 70
+        for i, (signal_name, is_active) in enumerate(signals):
+            sig_x = start_x + i * signal_spacing
+            # Draw signal indicator
+            color = "#2ecc71" if is_active else "#7f8c8d"
+            self.canvas.create_oval(
+                sig_x - 3, signal_y - 3,
+                sig_x + 3, signal_y + 3,
+                fill=color,
+                outline="white",
+                tags="expanded_node"
+            )
+            self.canvas.create_text(
+                sig_x, signal_y + 10,
+                text=signal_name,
+                fill="white",
+                font=("Arial", 7),
+                tags="expanded_node"
+            )
+        
+        # Draw Routing Logic (hexagon)
+        self.draw_hexagon(x - 60, y - 20, 25, "#3498db", "Routing\nLogic")
+        
+        # Draw Application Logic (hexagon)
+        self.draw_hexagon(x, y - 20, 25, "#9b59b6", "Application\nLogic")
+        
+        # Draw Control Logic (hexagon)
+        self.draw_hexagon(x + 60, y - 20, 25, "#e67e22", "Control\nLogic")
+        
+        # Draw Send Buffer (circular with segments)
+        self.draw_circular_buffer(x - 60, y + 50, 30, node.output_buffer, "Send")
+        
+        # Draw Receive Buffer (circular with segments)
+        self.draw_circular_buffer(x + 60, y + 50, 30, node.input_buffer, "Receive")
+        
+        # Draw Send Register
+        self.canvas.create_rectangle(
+            x - 40, y + 90,
+            x + 40, y + 105,
+            fill="#34495e",
+            outline="white",
+            width=1,
+            tags="expanded_node"
+        )
+        self.canvas.create_text(
+            x, y + 97,
+            text="Send Register",
+            fill="white",
+            font=("Arial", 8),
+            tags="expanded_node"
+        )
+        
+        # Draw Receive Register
+        self.canvas.create_rectangle(
+            x - 40, y + 110,
+            x + 40, y + 125,
+            fill="#34495e",
+            outline="white",
+            width=1,
+            tags="expanded_node"
+        )
+        self.canvas.create_text(
+            x, y + 117,
+            text="Receive Register",
+            fill="white",
+            font=("Arial", 8),
+            tags="expanded_node"
+        )
+        
+        # Draw status bits on left
+        bit_y = y + 30
+        self.canvas.create_text(
+            x - 80, bit_y,
+            text="• Receive Bit",
+            fill="white",
+            font=("Arial", 7),
+            anchor=tk.W,
+            tags="expanded_node"
+        )
+        self.canvas.create_text(
+            x - 80, bit_y + 15,
+            text="• Transfer Bit",
+            fill="white",
+            font=("Arial", 7),
+            anchor=tk.W,
+            tags="expanded_node"
+        )
+        
+        # Draw Busy Bit on right
+        busy_status = "IDLE"
+        if self.is_simulating and self.current_packet and node_pos == self.current_packet.current_node:
+            busy_status = "BUSY"
+        busy_color = "#e74c3c" if busy_status == "BUSY" else "#2ecc71"
+        self.canvas.create_text(
+            x + 80, bit_y,
+            text=f"• Busy Bit",
+            fill="white",
+            font=("Arial", 7),
+            anchor=tk.E,
+            tags="expanded_node"
+        )
+        self.canvas.create_text(
+            x + 80, bit_y + 15,
+            text=busy_status,
+            fill=busy_color,
+            font=("Arial", 8, "bold"),
+            anchor=tk.E,
+            tags="expanded_node"
+        )
+        
+        # Draw buffer statistics at bottom
+        stats_y = y + exp_height/2 - 20
+        stats_text = f"In: {node.input_buffer.size()}/{node.input_buffer.capacity}  |  Out: {node.output_buffer.size()}/{node.output_buffer.capacity}"
+        self.canvas.create_text(
+            x, stats_y,
+            text=stats_text,
+            fill="#ecf0f1",
+            font=("Arial", 8),
+            tags="expanded_node"
+        )
+    
+    def draw_hexagon(self, x: float, y: float, size: int, color: str, text: str):
+        """Draw hexagon shape for logic blocks"""
+        import math
+        points = []
+        for i in range(6):
+            angle = math.pi / 3 * i
+            px = x + size * math.cos(angle)
+            py = y + size * math.sin(angle)
+            points.extend([px, py])
+        
+        self.canvas.create_polygon(
+            points,
+            fill=color,
+            outline="white",
+            width=2,
+            tags="expanded_node"
+        )
+        self.canvas.create_text(
+            x, y,
+            text=text,
+            fill="white",
+            font=("Arial", 7, "bold"),
+            tags="expanded_node"
+        )
+    
+    def draw_circular_buffer(self, x: float, y: float, radius: int, buffer, label: str):
+        """Draw circular buffer with segments showing occupancy"""
+        from ..core.buffer import Buffer
+        
+        # Draw outer circle
+        self.canvas.create_oval(
+            x - radius, y - radius,
+            x + radius, y + radius,
+            fill="#34495e",
+            outline="white",
+            width=2,
+            tags="expanded_node"
+        )
+        
+        # Draw segments (like pie chart)
+        import math
+        segments = 8  # Visual segments
+        occupied = buffer.size()
+        capacity = buffer.capacity
+        
+        for i in range(segments):
+            angle_start = (360 / segments) * i
+            angle_end = (360 / segments) * (i + 1)
+            
+            # Determine if segment is filled
+            segment_threshold = (capacity / segments) * (i + 1)
+            is_filled = occupied >= segment_threshold
+            
+            # Draw segment line
+            angle_rad = math.radians(angle_start - 90)
+            x1 = x + (radius * 0.3) * math.cos(angle_rad)
+            y1 = y + (radius * 0.3) * math.sin(angle_rad)
+            x2 = x + radius * math.cos(angle_rad)
+            y2 = y + radius * math.sin(angle_rad)
+            
+            color = "#2ecc71" if is_filled else "#7f8c8d"
+            self.canvas.create_line(
+                x1, y1, x2, y2,
+                fill=color,
+                width=2,
+                tags="expanded_node"
+            )
+        
+        # Draw center label
+        self.canvas.create_text(
+            x, y - radius - 12,
+            text=f"{label} Buffer",
+            fill="white",
+            font=("Arial", 8, "bold"),
+            tags="expanded_node"
+        )
+        self.canvas.create_text(
+            x, y,
+            text=f"{occupied}/{capacity}",
+            fill="white",
+            font=("Arial", 8),
+            tags="expanded_node"
+        )
     
     def on_canvas_resize(self, event):
         """Handle canvas resize"""
@@ -833,9 +1205,9 @@ Controls Guide:
             self.cols = new_cols
             
             # Reset everything
-            self.clear_selection()
             self.reset_simulation()
             self.create_mesh_network()
+            self.clear_selection()
             
             self.main_window.update_status(f"Mesh network created: {self.rows}×{self.cols}")
             
@@ -868,11 +1240,18 @@ Controls Guide:
         self.draw_network()
     
     def start_simulation(self):
-        """Start packet routing simulation following Content.txt specification"""
+        """Start packet routing simulation - supports multiple parallel packets"""
         if self.source_node is None or self.dest_node is None:
             messagebox.showwarning(
                 "Incomplete Selection",
                 "Please select both source and destination nodes"
+            )
+            return
+        
+        if self.source_node == self.dest_node:
+            messagebox.showwarning(
+                "Invalid Selection",
+                "Source and destination must be different!"
             )
             return
         
@@ -881,9 +1260,8 @@ Controls Guide:
         if not self.packet_data:
             self.packet_data = "Default packet data"
         
-        # Create packet with user data
-        # Following Content.txt: packet contains header (destination) + payload (data)
-        self.current_packet = Packet(
+        # Create new packet (packet_id is auto-generated by Packet class)
+        new_packet = Packet(
             source=self.source_node,
             destination=self.dest_node,
             payload={
@@ -891,112 +1269,163 @@ Controls Guide:
                 "size": len(self.packet_data),
                 "type": "user_packet"
             },
-            creation_time=self.simulation_step
+            creation_time=self.simulation_step,
+            priority=1
         )
         
-        # Step 1 (Content.txt): Reception and Input
-        # Inject packet at source - goes to Send Buffer first
-        source_node = self.nodes[self.source_node]
-        source_node.inject_packet(self.current_packet)
+        # Calculate route using XY routing
+        route = self.routing_algorithm.route(
+            self.source_node,
+            self.dest_node,
+            self.rows,
+            self.cols
+        )
         
+        new_packet.path = route
+        new_packet.current_node = self.source_node
+        new_packet.status = PacketStatus.IN_TRANSIT
+        
+        # Add to active packets list
+        self.active_packets.append(new_packet)
+        
+        # Track total packets created
+        self.packet_id_counter = new_packet.packet_id
+        
+        # Set as current packet for compatibility
+        self.current_packet = new_packet
+        
+        # Update state
         self.is_simulating = True
-        self.simulation_step = 0
-        self.start_btn.config(state=tk.DISABLED)
+        if self.simulation_step == 0:
+            self.simulation_step = 0
+        self.start_btn.config(state=tk.NORMAL)  # Allow adding more packets
         self.step_btn.config(state=tk.NORMAL)
         
+        # Update status
         self.main_window.update_status(
-            f"Simulation started - Sending: '{self.packet_data[:30]}...'"
-        )
-        self.animate_simulation()
-    
-    def step_simulation(self):
-        """
-        Perform one simulation step following Content.txt specification:
-        1. Reception and Input (Receive Bit, Receive Buffer)
-        2. Routing and Decision (Routing Logic, REQ signal)
-        3. Transmission and Flow Control (ACK, Transfer Bit, CLK)
-        4. Congestion Management (Choke signal)
-        """
-        if not self.current_packet or self.current_packet.status == PacketStatus.DELIVERED:
-            return
-        
-        current_pos = self.current_packet.current_node
-        current_node = self.nodes[current_pos]
-        
-        # Step 2 (Content.txt): Routing and Decision
-        # Routing Logic reads destination address from header flit
-        next_direction = self.routing_algorithm.get_next_direction(
-            current_node,
-            self.current_packet
+            f"Packet #{new_packet.packet_id} created: {self.source_node} → {self.dest_node}"
         )
         
-        if next_direction is None:
-            # Step 4 (Content.txt): Local Interaction
-            # Packet has reached destination - eject from Receive Buffer
-            self.current_packet.deliver(self.simulation_step)
-            self.is_simulating = False
-            self.start_btn.config(state=tk.NORMAL)
-            self.step_btn.config(state=tk.DISABLED)
-            
-            # Show delivered data
-            delivered_data = self.current_packet.payload.get("data", "")
-            self.main_window.update_status(
-                f"✓ Packet delivered! Data: '{delivered_data[:30]}...' | "
-                f"Hops: {self.current_packet.hops} | "
-                f"Latency: {self.current_packet.get_latency()} cycles"
-            )
-        else:
-            # Step 2 (Content.txt): Control Logic sends REQ signal to downstream
-            next_node = current_node.get_neighbor(next_direction)
-            
-            if next_node:
-                # Step 4 (Content.txt): Check for congestion
-                # If Receive Buffer nearly full, assert Choke signal
-                if next_node.input_buffer.size() >= next_node.input_buffer.capacity * 0.8:
-                    self.main_window.update_status(
-                        f"⚠ Choke signal! Buffer congestion at {next_node.position}"
-                    )
-                
-                # Step 3 (Content.txt): Transmission and Flow Control
-                # Downstream sends ACK signal if buffer space available
-                if not next_node.input_buffer.is_full():
-                    # Transfer Bit asserted - move packet across link (synchronized by CLK)
-                    # Packet moves from Send Register to Receive Buffer of next node
-                    next_node.receive_packet(self.current_packet, self.simulation_step)
-                    self.simulation_step += 1
-                    
-                    self.main_window.update_status(
-                        f"Routing: {current_pos} → {next_node.position} ({next_direction.name})"
-                    )
-                else:
-                    # No ACK - buffer full, backpressure flow control active
-                    self.main_window.update_status(
-                        f"⚠ Backpressure! Buffer full at {next_node.position}"
-                    )
+        # Clear selection to allow new packet creation
+        self.source_node = None
+        self.dest_node = None
+        self.source_label.config(text="Not selected")
+        self.dest_label.config(text="Not selected")
+        
+        # Start animation if not already running
+        if len(self.active_packets) == 1:
+            self.animate_simulation()
         
         self.draw_network()
         self.update_statistics()
     
-    def animate_simulation(self):
-        """Animate simulation with delays"""
-        if not self.is_simulating:
+    def step_simulation(self):
+        """Move ALL active packets one step - supports parallel packet transfers"""
+        if not self.active_packets:
             return
         
-        self.step_simulation()
+        packets_to_remove = []
         
-        if self.is_simulating:
-            delay = self.speed_var.get()
-            self.canvas.after(delay, self.animate_simulation)
+        # Move all active packets in parallel
+        for packet in self.active_packets:
+            if packet.status == PacketStatus.DELIVERED:
+                packets_to_remove.append(packet)
+                continue
+            
+            current_idx = packet.path.index(packet.current_node)
+            
+            # Check if reached destination
+            if current_idx >= len(packet.path) - 1:
+                packet.status = PacketStatus.DELIVERED
+                packet.current_node = packet.destination
+                self.main_window.update_status(
+                    f"✓ Packet #{packet.packet_id} delivered to {packet.destination}!"
+                )
+                packets_to_remove.append(packet)
+                continue
+            
+            # Move to next node in path
+            next_node_pos = packet.path[current_idx + 1]
+            current_node = self.nodes[packet.current_node]
+            next_node = self.nodes[next_node_pos]
+            
+            # Buffer management (Reception -> Routing -> Transmission)
+            # 1. Reception: Check if next node can receive (REQ signal)
+            if next_node.input_buffer.is_full():
+                # Choke signal - wait
+                self.main_window.update_status(
+                    f"⚠ Packet #{packet.packet_id} waiting: Buffer full at {next_node_pos}"
+                )
+                continue
+            
+            # 2. Routing: Move packet from current output buffer
+            if not current_node.output_buffer.is_empty():
+                current_node.output_buffer.dequeue()
+            
+            # 3. Transmission: Add to next node's input buffer (ACK signal)
+            next_node.input_buffer.enqueue(packet)
+            packet.current_node = next_node_pos
+            
+            # 4. Flow Control: Process at next node
+            if not next_node.input_buffer.is_empty():
+                next_node.output_buffer.enqueue(next_node.input_buffer.dequeue())
+            
+            self.main_window.update_status(
+                f"→ Packet #{packet.packet_id} moved to {next_node_pos}"
+            )
+        
+        # Remove delivered packets
+        for packet in packets_to_remove:
+            self.active_packets.remove(packet)
+        
+        # Update current_packet to first active packet (for compatibility)
+        if self.active_packets:
+            self.current_packet = self.active_packets[0]
+        else:
+            self.current_packet = None
+        
+        self.simulation_step += 1
+        self.draw_network()
+        self.update_statistics()
+        
+        # Check if all packets delivered
+        if not self.active_packets:
+            self.is_simulating = False
+            self.start_btn.config(state=tk.NORMAL)
+            self.step_btn.config(state=tk.DISABLED)
+            self.main_window.update_status("✓ All packets delivered!")
+            messagebox.showinfo(
+                "Simulation Complete",
+                f"All packets successfully delivered!\nTotal steps: {self.simulation_step}"
+            )
+    
+    def animate_simulation(self):
+        """Automatically animate the simulation - handles multiple packets"""
+        if self.is_simulating and self.active_packets:
+            self.step_simulation()
+            # Continue animation if packets still active
+            if self.active_packets:
+                self.canvas.after(self.speed_var.get(), self.animate_simulation)
     
     def reset_simulation(self):
         """Reset simulation state"""
         self.is_simulating = False
         self.simulation_step = 0
         self.current_packet = None
+        self.active_packets.clear()
+        self.packet_id_counter = 0
+        Packet.reset_counter()  # Reset the Packet class counter
         self.start_btn.config(state=tk.NORMAL)
         self.step_btn.config(state=tk.DISABLED)
         
         # Clear all buffers
+        for node in self.nodes.values():
+            node.input_buffer.clear()
+            node.output_buffer.clear()
+        
+        self.main_window.update_status("Simulation reset")
+        self.draw_network()
+        self.update_statistics()
         for node in self.nodes.values():
             node.input_buffer.clear()
             node.output_buffer.clear()
@@ -1007,64 +1436,31 @@ Controls Guide:
         self.main_window.update_status("Simulation reset")
     
     def update_statistics(self):
-        """Update statistics display"""
+        """Update statistics display with multiple packet support"""
         self.stats_text.config(state=tk.NORMAL)
         self.stats_text.delete(1.0, tk.END)
         
         stats = f"""Network Statistics:
-━━━━━━━━━━━━━━━━━━━━━━━━━
-Topology: Mesh {self.rows}×{self.cols}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Grid Size: {self.rows} × {self.cols}
 Total Nodes: {len(self.nodes)}
-Routing: XY Algorithm
+Active Packets: {len(self.active_packets)}
+Total Packets: {self.packet_id_counter}
+Simulation Step: {self.simulation_step}
 
+Status: {"Running" if self.is_simulating else "Idle"}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
         
-        if self.source_node and self.dest_node:
-            hops = self.routing_algorithm.calculate_hops(
-                self.source_node,
-                self.dest_node
-            )
-            stats += f"""Routing Info:
-Source: {self.source_node}
-Destination: {self.dest_node}
-Expected Hops: {hops}
-
-"""
-        
-        if self.current_packet:
-            packet_data = self.current_packet.payload.get("data", "")
-            data_preview = packet_data[:30] + "..." if len(packet_data) > 30 else packet_data
-            
-            stats += f"""Current Packet:
-ID: {self.current_packet.packet_id}
-Data: "{data_preview}"
-Size: {len(packet_data)} bytes
-Status: {self.current_packet.status.value}
-Current Hops: {self.current_packet.hops}
-"""
-            if self.current_packet.status == PacketStatus.DELIVERED:
-                stats += f"Latency: {self.current_packet.get_latency()} cycles\n"
-            
-            # Show buffer flow control info
-            if self.current_packet.current_node:
-                curr_node = self.nodes[self.current_packet.current_node]
-                stats += f"""\nBuffer Status (Content.txt):
-Receive Buffer: {curr_node.input_buffer.size()}/{curr_node.input_buffer.capacity}
-Send Buffer: {curr_node.output_buffer.size()}/{curr_node.output_buffer.capacity}
-"""
-                # Show if Choke signal would be asserted
-                if curr_node.input_buffer.size() >= curr_node.input_buffer.capacity * 0.8:
-                    stats += "⚠ Choke Signal: ACTIVE\n"
-        
-        # Node statistics
-        total_generated = sum(n.packets_generated for n in self.nodes.values())
-        total_received = sum(n.packets_received for n in self.nodes.values())
-        
-        if total_generated > 0 or total_received > 0:
-            stats += f"""\nPacket Statistics:
-Generated: {total_generated}
-Received: {total_received}
-"""
+        if self.active_packets:
+            stats += "\nActive Packets:\n"
+            for packet in self.active_packets:
+                progress = 0
+                if packet.path:
+                    current_idx = packet.path.index(packet.current_node) if packet.current_node in packet.path else 0
+                    progress = int((current_idx / max(1, len(packet.path) - 1)) * 100)
+                
+                stats += f"  #{packet.packet_id}: {packet.current_node} → {packet.destination} ({progress}%)\n"
         
         self.stats_text.insert(1.0, stats)
         self.stats_text.config(state=tk.DISABLED)
