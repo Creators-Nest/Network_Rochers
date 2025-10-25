@@ -144,6 +144,47 @@ class XYRouting(BaseRouting):
             Number of hops (Manhattan distance)
         """
         return self.calculate_manhattan_distance(source, destination)
+    
+    def route(
+        self,
+        source: Tuple[int, int],
+        destination: Tuple[int, int],
+        rows: int,
+        cols: int
+    ) -> list[Tuple[int, int]]:
+        """
+        Calculate complete node-by-node path from source to destination
+        
+        Args:
+            source: Source position (row, col)
+            destination: Destination position (row, col)
+            rows: Number of rows in mesh
+            cols: Number of columns in mesh
+            
+        Returns:
+            List of node positions forming the path
+        """
+        path = [source]
+        current_row, current_col = source
+        dest_row, dest_col = destination
+        
+        # X dimension movement (columns)
+        while current_col != dest_col:
+            if current_col < dest_col:
+                current_col += 1
+            else:
+                current_col -= 1
+            path.append((current_row, current_col))
+        
+        # Y dimension movement (rows)
+        while current_row != dest_row:
+            if current_row < dest_row:
+                current_row += 1
+            else:
+                current_row -= 1
+            path.append((current_row, current_col))
+        
+        return path
 
 
 class YXRouting(BaseRouting):

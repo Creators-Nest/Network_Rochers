@@ -671,30 +671,44 @@ Controls Guide:
         # Draw connections first (so they appear behind nodes)
         for row in range(self.rows):
             for col in range(self.cols):
+                if (row, col) not in self.nodes:
+                    continue
+                
+                node = self.nodes[(row, col)]
                 x1 = margin + col * spacing_x * self.zoom_level + self.offset_x
                 y1 = margin + row * spacing_y * self.zoom_level + self.offset_y
                 
-                # Draw horizontal connections
-                if col < self.cols - 1:
+                # Draw horizontal connections with signal indicators
+                if col < self.cols - 1 and (row, col + 1) in self.nodes:
                     x2 = margin + (col + 1) * spacing_x * self.zoom_level + self.offset_x
                     y2 = y1
+                    
+                    # Base connection line
                     self.canvas.create_line(
                         x1, y1, x2, y2,
                         fill=self.colors['connection'],
                         width=2,
                         tags="connection"
                     )
+                    
+                    # Draw signal indicators for EAST direction
+                    self._draw_signal_indicators(node, Direction.EAST, x1, y1, x2, y2)
                 
-                # Draw vertical connections
-                if row < self.rows - 1:
+                # Draw vertical connections with signal indicators
+                if row < self.rows - 1 and (row + 1, col) in self.nodes:
                     x2 = x1
                     y2 = margin + (row + 1) * spacing_y * self.zoom_level + self.offset_y
+                    
+                    # Base connection line
                     self.canvas.create_line(
                         x1, y1, x2, y2,
                         fill=self.colors['connection'],
                         width=2,
                         tags="connection"
                     )
+                    
+                    # Draw signal indicators for SOUTH direction
+                    self._draw_signal_indicators(node, Direction.SOUTH, x1, y1, x2, y2)
         
         # Draw nodes (now as squares)
         for row in range(self.rows):
@@ -946,8 +960,8 @@ Controls Guide:
         y = margin + row * spacing_y * self.zoom_level + self.offset_y
         
         # Expanded size (larger than normal) - INCREASED SIZE
-        exp_width = 280
-        exp_height = 300
+        exp_width = 360
+        exp_height = 380
         
         # Draw expanded background
         self.canvas.create_rectangle(
@@ -961,15 +975,15 @@ Controls Guide:
         
         # Title
         self.canvas.create_text(
-            x, y - exp_height/2 + 15,
+            x, y - exp_height/2 + 20,
             text=f"Router Node ({row},{col})",
             fill="white",
-            font=("Arial", 10, "bold"),
+            font=("Arial", 12, "bold"),
             tags="expanded_node"
         )
         
         # Draw signal indicators at top (REQ, ACK, DATA, CLK, Choke)
-        signal_y = y - exp_height/2 + 35
+        signal_y = y - exp_height/2 + 45
         signals = [
             ("REQ", node.input_buffer.size() > 0),
             ("ACK", not node.input_buffer.is_full()),
@@ -978,125 +992,135 @@ Controls Guide:
             ("Choke", node.input_buffer.size() >= node.input_buffer.capacity * 0.8)
         ]
         
-        signal_spacing = 35
-        start_x = x - 70
+        signal_spacing = 40
+        start_x = x - 80
         for i, (signal_name, is_active) in enumerate(signals):
             sig_x = start_x + i * signal_spacing
-            # Draw signal indicator
+            
+            # Draw signal circle indicator
+            circle_radius = 8
             color = "#2ecc71" if is_active else "#7f8c8d"
+            
             self.canvas.create_oval(
-                sig_x - 3, signal_y - 3,
-                sig_x + 3, signal_y + 3,
+                sig_x - circle_radius, signal_y - circle_radius,
+                sig_x + circle_radius, signal_y + circle_radius,
                 fill=color,
                 outline="white",
+                width=2,
                 tags="expanded_node"
             )
+            
+            # Draw signal label with larger font
             self.canvas.create_text(
-                sig_x, signal_y + 10,
+                sig_x, signal_y + circle_radius + 12,
                 text=signal_name,
                 fill="white",
-                font=("Arial", 7),
+                font=("Arial", 9, "bold"),
                 tags="expanded_node"
             )
         
-        # Draw Routing Logic (hexagon)
-        self.draw_hexagon(x - 60, y - 20, 25, "#3498db", "Routing\nLogic")
+        # Draw Routing Logic (hexagon) - LARGER SIZE
+        self.draw_hexagon(x - 70, y + 10, 38, "#3498db", "Routing\nLogic")
         
-        # Draw Application Logic (hexagon)
-        self.draw_hexagon(x, y - 20, 25, "#9b59b6", "Application\nLogic")
+        # Draw Application Logic (hexagon) - LARGER SIZE
+        self.draw_hexagon(x, y + 10, 38, "#9b59b6", "Application\nLogic")
         
-        # Draw Control Logic (hexagon)
-        self.draw_hexagon(x + 60, y - 20, 25, "#e67e22", "Control\nLogic")
+        # Draw Control Logic (hexagon) - LARGER SIZE
+        self.draw_hexagon(x + 70, y + 10, 38, "#e67e22", "Control\nLogic")
         
-        # Draw Send Buffer (circular with segments)
-        self.draw_circular_buffer(x - 60, y + 50, 30, node.output_buffer, "Send")
+        # Draw Send Buffer (circular with segments) - LARGER SIZE with label below
+        self.draw_circular_buffer(x - 85, y + 95, 45, node.output_buffer, "Send Buffer")
         
-        # Draw Receive Buffer (circular with segments)
-        self.draw_circular_buffer(x + 60, y + 50, 30, node.input_buffer, "Receive")
+        # Draw Receive Buffer (circular with segments) - LARGER SIZE with label below
+        self.draw_circular_buffer(x + 85, y + 95, 45, node.input_buffer, "Receive Buffer")
         
-        # Draw Send Register
+        # Draw Send Register and Receive Register ADJACENT (side by side)
+        register_y = y + exp_height/2 - 70
+        
+        # Send Register (left)
         self.canvas.create_rectangle(
-            x - 40, y + 90,
-            x + 40, y + 105,
+            x - 100, register_y,
+            x - 10, register_y + 22,
             fill="#34495e",
             outline="white",
-            width=1,
+            width=2,
             tags="expanded_node"
         )
         self.canvas.create_text(
-            x, y + 97,
+            x - 55, register_y + 11,
             text="Send Register",
             fill="white",
-            font=("Arial", 8),
+            font=("Arial", 9, "bold"),
             tags="expanded_node"
         )
         
-        # Draw Receive Register
+        # Receive Register (right)
         self.canvas.create_rectangle(
-            x - 40, y + 110,
-            x + 40, y + 125,
+            x + 10, register_y,
+            x + 100, register_y + 22,
             fill="#34495e",
             outline="white",
-            width=1,
+            width=2,
             tags="expanded_node"
         )
         self.canvas.create_text(
-            x, y + 117,
+            x + 55, register_y + 11,
             text="Receive Register",
             fill="white",
-            font=("Arial", 8),
+            font=("Arial", 9, "bold"),
             tags="expanded_node"
         )
         
-        # Draw status bits on left
-        bit_y = y + 30
+        # Draw status bits below circles with names below and counts
+        bit_y = y + 170
+        
+        # Receive Bit (below left circle)
         self.canvas.create_text(
-            x - 80, bit_y,
-            text="• Receive Bit",
+            x - 85, bit_y,
+            text="Receive Bit",
             fill="white",
-            font=("Arial", 7),
-            anchor=tk.W,
-            tags="expanded_node"
-        )
-        self.canvas.create_text(
-            x - 80, bit_y + 15,
-            text="• Transfer Bit",
-            fill="white",
-            font=("Arial", 7),
-            anchor=tk.W,
+            font=("Arial", 10, "bold"),
             tags="expanded_node"
         )
         
-        # Draw Busy Bit on right
+        # Transfer Bit (below left circle)
+        self.canvas.create_text(
+            x - 85, bit_y + 20,
+            text="Transfer Bit",
+            fill="white",
+            font=("Arial", 10, "bold"),
+            tags="expanded_node"
+        )
+        
+        # Busy Bit (below right circle)
         busy_status = "IDLE"
         if self.is_simulating and self.current_packet and node_pos == self.current_packet.current_node:
             busy_status = "BUSY"
         busy_color = "#e74c3c" if busy_status == "BUSY" else "#2ecc71"
+        
         self.canvas.create_text(
-            x + 80, bit_y,
-            text=f"• Busy Bit",
+            x + 85, bit_y,
+            text="Busy Bit",
             fill="white",
-            font=("Arial", 7),
-            anchor=tk.E,
+            font=("Arial", 10, "bold"),
             tags="expanded_node"
         )
         self.canvas.create_text(
-            x + 80, bit_y + 15,
+            x + 85, bit_y + 20,
             text=busy_status,
             fill=busy_color,
-            font=("Arial", 8, "bold"),
-            anchor=tk.E,
+            font=("Arial", 11, "bold"),
             tags="expanded_node"
         )
         
         # Draw buffer statistics at bottom
-        stats_y = y + exp_height/2 - 20
+        stats_y = y + exp_height/2 - 25
         stats_text = f"In: {node.input_buffer.size()}/{node.input_buffer.capacity}  |  Out: {node.output_buffer.size()}/{node.output_buffer.capacity}"
         self.canvas.create_text(
             x, stats_y,
             text=stats_text,
             fill="#ecf0f1",
-            font=("Arial", 8),
+            font=("Arial", 10, "bold"),
             tags="expanded_node"
         )
     
@@ -1126,16 +1150,16 @@ Controls Guide:
         )
     
     def draw_circular_buffer(self, x: float, y: float, radius: int, buffer, label: str):
-        """Draw circular buffer with segments showing occupancy"""
+        """Draw circular buffer with segments showing occupancy - label below, count inside"""
         from ..core.buffer import Buffer
         
-        # Draw outer circle
+        # Draw outer circle with thicker border
         self.canvas.create_oval(
             x - radius, y - radius,
             x + radius, y + radius,
             fill="#34495e",
             outline="white",
-            width=2,
+            width=3,
             tags="expanded_node"
         )
         
@@ -1164,25 +1188,93 @@ Controls Guide:
             self.canvas.create_line(
                 x1, y1, x2, y2,
                 fill=color,
-                width=2,
+                width=3,
                 tags="expanded_node"
             )
         
-        # Draw center label
+        # Draw label BELOW the circle
         self.canvas.create_text(
-            x, y - radius - 12,
-            text=f"{label} Buffer",
+            x, y + radius + 18,
+            text=label,
             fill="white",
-            font=("Arial", 8, "bold"),
+            font=("Arial", 10, "bold"),
             tags="expanded_node"
         )
+        
+        # Draw count INSIDE circle (center)
         self.canvas.create_text(
             x, y,
             text=f"{occupied}/{capacity}",
             fill="white",
-            font=("Arial", 8),
+            font=("Arial", 12, "bold"),
             tags="expanded_node"
         )
+    
+    def _draw_signal_indicators(self, node, direction: Direction, x1: float, y1: float, x2: float, y2: float):
+        """
+        Draw communication signal indicators between nodes (Figure 4)
+        Shows REQ, ACK, DATA, CLK, Choke signals for unidirectional mode
+        """
+        signals = node.get_signal_state(direction)
+        
+        # Calculate midpoint for signal indicators
+        mid_x = (x1 + x2) / 2
+        mid_y = (y1 + y2) / 2
+        
+        # Determine if connection is horizontal or vertical
+        is_horizontal = abs(y2 - y1) < abs(x2 - x1)
+        
+        # Offset for signal indicators
+        if is_horizontal:
+            offset_x, offset_y = 0, -15
+        else:
+            offset_x, offset_y = 15, 0
+        
+        # Draw signal indicators only if any signal is active
+        if any([signals['REQ'], signals['ACK'], signals['CLK'], signals['Choke']]):
+            indicator_y = mid_y + offset_y
+            indicator_x = mid_x + offset_x
+            
+            # REQ signal (red arrow if active)
+            if signals['REQ']:
+                self.canvas.create_text(
+                    indicator_x, indicator_y - 10,
+                    text="REQ→",
+                    fill="#e74c3c",
+                    font=("Arial", 9, "bold"),
+                    tags="signal"
+                )
+            
+            # ACK signal (green arrow if active)
+            if signals['ACK']:
+                self.canvas.create_text(
+                    indicator_x, indicator_y + 2,
+                    text="←ACK",
+                    fill="#2ecc71",
+                    font=("Arial", 9, "bold"),
+                    tags="signal"
+                )
+            
+            # CLK signal (blue pulse if active)
+            if signals['CLK']:
+                self.canvas.create_oval(
+                    mid_x - 4, mid_y - 4,
+                    mid_x + 4, mid_y + 4,
+                    fill="#3498db",
+                    outline="white",
+                    width=2,
+                    tags="signal"
+                )
+            
+            # Choke signal (yellow warning if active)
+            if signals['Choke']:
+                self.canvas.create_text(
+                    indicator_x, indicator_y + 12,
+                    text="⚠",
+                    fill="#f39c12",
+                    font=("Arial", 12, "bold"),
+                    tags="signal"
+                )
     
     def on_canvas_resize(self, event):
         """Handle canvas resize"""
@@ -1320,13 +1412,16 @@ Controls Guide:
         self.update_statistics()
     
     def step_simulation(self):
-        """Move ALL active packets one step - supports parallel packet transfers"""
+        """
+        Move ALL active packets one step using Figure 4 protocol
+        REQ/ACK/DATA/CLK/Choke handshaking mechanism
+        """
         if not self.active_packets:
             return
         
         packets_to_remove = []
         
-        # Move all active packets in parallel
+        # Phase 1: Request phase - packets request transfer (REQ signal)
         for packet in self.active_packets:
             if packet.status == PacketStatus.DELIVERED:
                 packets_to_remove.append(packet)
@@ -1344,41 +1439,64 @@ Controls Guide:
                 packets_to_remove.append(packet)
                 continue
             
-            # Move to next node in path
+            # Get current and next node
             next_node_pos = packet.path[current_idx + 1]
             current_node = self.nodes[packet.current_node]
             next_node = self.nodes[next_node_pos]
             
-            # Buffer management (Reception -> Routing -> Transmission)
-            # 1. Reception: Check if next node can receive (REQ signal)
-            if next_node.input_buffer.is_full():
-                # Choke signal - wait
-                self.main_window.update_status(
-                    f"⚠ Packet #{packet.packet_id} waiting: Buffer full at {next_node_pos}"
-                )
-                continue
+            # Determine direction for transfer
+            direction = self._get_direction(packet.current_node, next_node_pos)
             
-            # 2. Routing: Move packet from current output buffer
-            if not current_node.output_buffer.is_empty():
-                current_node.output_buffer.dequeue()
-            
-            # 3. Transmission: Add to next node's input buffer (ACK signal)
-            next_node.input_buffer.enqueue(packet)
-            packet.current_node = next_node_pos
-            
-            # 4. Flow Control: Process at next node
-            if not next_node.input_buffer.is_empty():
-                next_node.output_buffer.enqueue(next_node.input_buffer.dequeue())
-            
-            self.main_window.update_status(
-                f"→ Packet #{packet.packet_id} moved to {next_node_pos}"
-            )
+            if direction:
+                # Step 1: Check Choke signal (fairness mechanism)
+                opposite_dir = self._opposite_direction(direction)
+                if next_node.signals.get(opposite_dir, {}).get('Choke', False):
+                    self.main_window.update_status(
+                        f"⚠ Packet #{packet.packet_id}: Choke active, waiting for fairness"
+                    )
+                    continue
+                
+                # Step 2: Raise REQ signal (request transfer)
+                if current_node.initiate_transfer(direction, packet):
+                    # Step 3: Next node acknowledges (ACK signal)
+                    if next_node.acknowledge_transfer(opposite_dir):
+                        # Step 4: CLK pulse - complete transfer with DATA
+                        transferred = next_node.complete_transfer(opposite_dir)
+                        
+                        if transferred:
+                            # Update packet position
+                            packet.current_node = next_node_pos
+                            
+                            # Move from current output buffer
+                            if not current_node.output_buffer.is_empty():
+                                current_node.output_buffer.dequeue()
+                            
+                            # Process at next node (Reception → Routing)
+                            if not next_node.input_buffer.is_empty():
+                                next_node.output_buffer.enqueue(next_node.input_buffer.dequeue())
+                            
+                            self.main_window.update_status(
+                                f"→ Packet #{packet.packet_id}: {packet.current_node} (REQ→ACK→CLK→DATA)"
+                            )
+                        else:
+                            self.main_window.update_status(
+                                f"⚠ Packet #{packet.packet_id}: Transfer failed at {next_node_pos}"
+                            )
+                    else:
+                        self.main_window.update_status(
+                            f"⚠ Packet #{packet.packet_id}: No ACK from {next_node_pos}"
+                        )
+                else:
+                    # Buffer full - cannot initiate transfer
+                    self.main_window.update_status(
+                        f"⚠ Packet #{packet.packet_id}: Buffer full at {next_node_pos}"
+                    )
         
         # Remove delivered packets
         for packet in packets_to_remove:
             self.active_packets.remove(packet)
         
-        # Update current_packet to first active packet (for compatibility)
+        # Update current_packet to first active packet
         if self.active_packets:
             self.current_packet = self.active_packets[0]
         else:
@@ -1398,6 +1516,32 @@ Controls Guide:
                 "Simulation Complete",
                 f"All packets successfully delivered!\nTotal steps: {self.simulation_step}"
             )
+    
+    def _get_direction(self, from_pos: Tuple[int, int], to_pos: Tuple[int, int]) -> Optional[Direction]:
+        """Get direction from one position to another"""
+        from_row, from_col = from_pos
+        to_row, to_col = to_pos
+        
+        if to_row < from_row:
+            return Direction.NORTH
+        elif to_row > from_row:
+            return Direction.SOUTH
+        elif to_col < from_col:
+            return Direction.WEST
+        elif to_col > from_col:
+            return Direction.EAST
+        
+        return None
+    
+    def _opposite_direction(self, direction: Direction) -> Direction:
+        """Get opposite direction"""
+        opposites = {
+            Direction.NORTH: Direction.SOUTH,
+            Direction.SOUTH: Direction.NORTH,
+            Direction.EAST: Direction.WEST,
+            Direction.WEST: Direction.EAST,
+        }
+        return opposites.get(direction, direction)
     
     def animate_simulation(self):
         """Automatically animate the simulation - handles multiple packets"""

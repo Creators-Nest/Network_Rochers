@@ -98,6 +98,18 @@ class Node:
         self.packets_received = 0
         self.packets_dropped = 0
         
+        # Communication signals (per Figure 4 - Unidirectional mode)
+        self.signals = {
+            Direction.NORTH: {'REQ': False, 'ACK': False, 'DATA': None, 'CLK': False, 'Choke': False},
+            Direction.SOUTH: {'REQ': False, 'ACK': False, 'DATA': None, 'CLK': False, 'Choke': False},
+            Direction.EAST: {'REQ': False, 'ACK': False, 'DATA': None, 'CLK': False, 'Choke': False},
+            Direction.WEST: {'REQ': False, 'ACK': False, 'DATA': None, 'CLK': False, 'Choke': False},
+        }
+        
+        # Transfer state machine
+        self.transfer_state = "IDLE"  # IDLE, REQUESTING, TRANSFERRING, RECEIVING
+        self.current_transfer_direction: Optional[Direction] = None
+        
         # Clock cycle tracking
         self.last_activity_time = 0
     
@@ -234,6 +246,123 @@ class Node:
         self.packets_received = 0
         self.packets_dropped = 0
         self.last_activity_time = 0
+    
+    def initiate_transfer(self, direction: Direction, packet: Packet) -> bool:
+        """
+        Initiate packet transfer to neighbor (REQ signal)
+        Following Figure 4 - Unidirectional mode protocol
+        
+        Args:
+            direction: Direction to send packet
+            packet: Packet to transfer
+            
+        Returns:
+            True if transfer initiated
+        """
+        neighbor = self.get_neighbor(direction)
+        if not neighbor or not neighbor.can_receive():
+            return False
+        
+        # Check choke signal - if neighbor's send buffer is full, wait
+        if neighbor.signals[self._opposite_direction(direction)]['Choke']:
+            return False  # Fairness: let neighbor send first
+        
+        # Raise REQ signal
+        self.signals[direction]['REQ'] = True
+        self.signals[direction]['DATA'] = packet
+        self.transfer_state = "REQUESTING"
+        self.current_transfer_direction = direction
+        
+        return True
+    
+    def acknowledge_transfer(self, direction: Direction) -> bool:
+        """
+        Acknowledge incoming transfer request (ACK signal)
+        
+        Args:
+            direction: Direction of incoming request
+            
+        Returns:
+            True if acknowledged
+        """
+        opposite_dir = self._opposite_direction(direction)
+        neighbor = self.get_neighbor(direction)
+        
+        if not neighbor or not neighbor.signals[opposite_dir]['REQ']:
+            return False
+        
+        if not self.can_receive():
+            return False  # Buffer full
+        
+        # Raise ACK signal
+        self.signals[direction]['ACK'] = True
+        
+        # Set choke bit if our send buffer has packets (fairness)
+        if not self.output_buffer.is_empty():
+            self.signals[direction]['Choke'] = True
+        else:
+            self.signals[direction]['Choke'] = False
+        
+        return True
+    
+    def complete_transfer(self, direction: Direction) -> Optional[Packet]:
+        """
+        Complete packet transfer with CLK synchronization
+        
+        Args:
+            direction: Transfer direction
+            
+        Returns:
+            Transferred packet or None
+        """
+        neighbor = self.get_neighbor(direction)
+        opposite_dir = self._opposite_direction(direction)
+        
+        if not neighbor:
+            return None
+        
+        # Check for REQ-ACK handshake
+        if neighbor.signals[opposite_dir]['REQ'] and self.signals[direction]['ACK']:
+            # CLK pulse - transfer data
+            self.signals[direction]['CLK'] = True
+            packet = neighbor.signals[opposite_dir]['DATA']
+            
+            if packet and self.input_buffer.enqueue(packet):
+                # Clear signals
+                neighbor.signals[opposite_dir]['REQ'] = False
+                neighbor.signals[opposite_dir]['DATA'] = None
+                self.signals[direction]['ACK'] = False
+                self.signals[direction]['CLK'] = False
+                
+                # Update packet position
+                packet.current_node = self.position
+                packet.hops += 1
+                self.packets_received += 1
+                
+                # Clear neighbor's transfer state
+                if neighbor.current_transfer_direction == opposite_dir:
+                    neighbor.transfer_state = "IDLE"
+                    neighbor.current_transfer_direction = None
+                
+                return packet
+        
+        return None
+    
+    def _opposite_direction(self, direction: Direction) -> Direction:
+        """Get opposite direction for bidirectional communication"""
+        opposites = {
+            Direction.NORTH: Direction.SOUTH,
+            Direction.SOUTH: Direction.NORTH,
+            Direction.EAST: Direction.WEST,
+            Direction.WEST: Direction.EAST,
+        }
+        return opposites.get(direction, direction)
+    
+    def get_signal_state(self, direction: Direction) -> Dict:
+        """Get current signal state for a direction"""
+        if direction in self.signals:
+            return self.signals[direction].copy()
+        return {'REQ': False, 'ACK': False, 'DATA': None, 'CLK': False, 'Choke': False}
     
     def __repr__(self) -> str:
         """String representation"""
