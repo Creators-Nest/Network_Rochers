@@ -1,1 +1,0 @@
-"""RiCoBiT topology implementation"""
