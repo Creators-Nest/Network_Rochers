@@ -67,7 +67,8 @@ class RicoBitVisualizer:
         # Hover state for node details modal
         self.hover_node = None
         self.hover_timer = None
-        self.hover_window = None
+        self.hover_overlay = None  # Canvas overlay instead of window
+        self.hover_overlay_items = []  # Track canvas items for the overlay
         
         # Packet transfer state
         self.current_packet = None
@@ -105,6 +106,13 @@ class RicoBitVisualizer:
         self.zoom_level = 1.0
         self.pan_x = 0
         self.pan_y = 0
+        
+        # Drag state
+        self.is_dragging = False
+        self.drag_start_x = 0
+        self.drag_start_y = 0
+        self.drag_start_pan_x = 0
+        self.drag_start_pan_y = 0
         
         # Initial draw
         self.draw_topology()
@@ -574,6 +582,36 @@ class RicoBitVisualizer:
         # Update both speed labels if they exist
         if hasattr(self, 'speed_label_sim'):
             self.speed_label_sim.config(text=f"{int(value)} ms")
+        # Sync entry field
+        if hasattr(self, 'speed_entry'):
+            self.speed_entry.delete(0, tk.END)
+            self.speed_entry.insert(0, str(int(value)))
+    
+    def _on_speed_entry_change(self, event=None):
+        """Handle speed entry field change"""
+        try:
+            value = int(self.speed_entry.get())
+            # Clamp value to valid range
+            value = max(200, min(8000, value))
+            
+            # Update animation speed
+            self.animation_speed = value
+            
+            # Sync slider
+            self.speed_var.set(value)
+            
+            # Update label
+            if hasattr(self, 'speed_label_sim'):
+                self.speed_label_sim.config(text=f"{value} ms")
+            
+            # Update entry field in case it was clamped
+            self.speed_entry.delete(0, tk.END)
+            self.speed_entry.insert(0, str(value))
+            
+        except ValueError:
+            # Invalid input, reset to current value
+            self.speed_entry.delete(0, tk.END)
+            self.speed_entry.insert(0, str(self.animation_speed))
     
     def _create_simulation_details(self, parent):
         """Create simulation controls section"""
@@ -597,17 +635,33 @@ class RicoBitVisualizer:
                 bg=self.colors['panel_bg'], fg=self.colors['text_light']
                ).pack(side=tk.LEFT, padx=1)
         
+        # Reduced width slider (from 150 to 60)
         self.speed_var = tk.IntVar(value=1000)
-        self.speed_slider = tk.Scale(speed_control_frame, from_=200, to=3000, 
+        self.speed_slider = tk.Scale(speed_control_frame, from_=200, to=8000, 
                                      orient=tk.HORIZONTAL, variable=self.speed_var,
                                      command=self._on_speed_change,
                                      bg=self.colors['panel_bg'], fg=self.colors['text'],
                                      highlightthickness=0, relief=tk.FLAT,
-                                     showvalue=False, length=150)
-        self.speed_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=3)
+                                     showvalue=False, length=60)
+        self.speed_slider.pack(side=tk.LEFT, padx=3)
         
         tk.Label(speed_control_frame, text="Fast", font=("Arial", 7),
                 bg=self.colors['panel_bg'], fg=self.colors['text_light']
+               ).pack(side=tk.LEFT, padx=1)
+        
+        # Add entry field for manual input
+        self.speed_entry = tk.Entry(speed_control_frame, width=6, font=("Arial", 9),
+                                   bg='white', fg=self.colors['text'],
+                                   relief=tk.SUNKEN, bd=1)
+        self.speed_entry.pack(side=tk.LEFT, padx=5)
+        self.speed_entry.insert(0, "1000")
+        
+        # Bind entry field to update speed when user types
+        self.speed_entry.bind('<Return>', self._on_speed_entry_change)
+        self.speed_entry.bind('<FocusOut>', self._on_speed_entry_change)
+        
+        tk.Label(speed_control_frame, text="ms", font=("Arial", 8),
+                bg=self.colors['panel_bg'], fg=self.colors['text']
                ).pack(side=tk.LEFT, padx=1)
         
         self.speed_label_sim = tk.Label(speed_frame, text="1000 ms", font=("Arial", 7),
@@ -643,43 +697,57 @@ class RicoBitVisualizer:
             button_text = self.animate_button.cget('text')
             self.animate_button_sim.config(text=button_text)
         
-        # Update speed label
+        # Update speed label and sync entry field
         if hasattr(self, 'speed_label_sim'):
             self.speed_label_sim.config(text=f"{self.animation_speed} ms")
+        if hasattr(self, 'speed_entry'):
+            self.speed_entry.delete(0, tk.END)
+            self.speed_entry.insert(0, str(self.animation_speed))
     
     def _create_floating_view_controls(self):
         """Create floating view controls on canvas (like map controls) - TOP RIGHT CORNER"""
-        # Create a compact frame that floats on the canvas
-        control_frame = tk.Frame(self.canvas, bg='white', relief=tk.RAISED, bd=2)
+        # Create a more visible control frame
+        control_frame = tk.Frame(self.canvas, bg='#f0f0f0', relief=tk.RAISED, bd=3)
         
-        # Zoom buttons ONLY - compact design
-        zoom_frame = tk.Frame(control_frame, bg='white')
-        zoom_frame.pack(padx=3, pady=3)
+        # Zoom and reset buttons - more visible design
+        zoom_frame = tk.Frame(control_frame, bg='#f0f0f0')
+        zoom_frame.pack(padx=5, pady=5)
+        
+        # Reset button (Home icon)
+        tk.Button(zoom_frame, text="🏠", command=self.reset_view,
+                 bg='#4CAF50', fg='white', font=("Arial", 14, "bold"),
+                 width=3, height=1, relief=tk.RAISED, cursor="hand2",
+                 activebackground='#45a049').pack(pady=2)
         
         # + button (Zoom In)
         tk.Button(zoom_frame, text="+", command=self.zoom_in,
-                 bg='#e0e0e0', fg='#000000', font=("Arial", 16, "bold"),
-                 width=2, height=1, relief=tk.RAISED, cursor="hand2",
-                 activebackground='#c0c0c0').pack(pady=1)
+                 bg='#2196F3', fg='white', font=("Arial", 16, "bold"),
+                 width=3, height=1, relief=tk.RAISED, cursor="hand2",
+                 activebackground='#1976D2').pack(pady=2)
         
         # - button (Zoom Out)
         tk.Button(zoom_frame, text="−", command=self.zoom_out,
-                 bg='#e0e0e0', fg='#000000', font=("Arial", 16, "bold"),
-                 width=2, height=1, relief=tk.RAISED, cursor="hand2",
-                 activebackground='#c0c0c0').pack(pady=1)
+                 bg='#2196F3', fg='white', font=("Arial", 16, "bold"),
+                 width=3, height=1, relief=tk.RAISED, cursor="hand2",
+                 activebackground='#1976D2').pack(pady=2)
         
-        # Position the control frame in top-right corner
-        self.floating_controls = self.canvas.create_window(0, 0, window=control_frame, anchor='ne')
+        # Position the control frame in top-right corner with proper anchor
+        self.floating_controls = self.canvas.create_window(0, 0, window=control_frame, anchor='nw', tags='floating_controls')
         
-        # Update position when canvas resizes
+        # Update position when canvas resizes - ensure controls are always visible
         def update_position(event=None):
             canvas_width = self.canvas.winfo_width()
-            if canvas_width > 1:
-                self.canvas.coords(self.floating_controls, canvas_width - 10, 10)
+            canvas_height = self.canvas.winfo_height()
+            if canvas_width > 1 and canvas_height > 1:
+                # Position controls in top-right corner, accounting for control frame size
+                control_width = control_frame.winfo_reqwidth() or 60  # fallback width
+                x_pos = canvas_width - control_width - 10  # 10px margin from right edge
+                y_pos = 10  # 10px from top edge
+                self.canvas.coords(self.floating_controls, x_pos, y_pos)
         
         self.canvas.bind('<Configure>', update_position)
-        # Initial positioning
-        self.root.after(100, update_position)
+        # Initial positioning after canvas is ready
+        self.root.after(200, update_position)  # Increased delay to ensure canvas is ready
         
         # Make draggable for trackpad compatibility
         self._make_draggable(control_frame)
@@ -714,14 +782,51 @@ class RicoBitVisualizer:
         self.canvas.bind("<Button-1>", self.on_canvas_click)
         self.canvas.bind("<MouseWheel>", self.on_mousewheel)
         self.canvas.bind("<Motion>", self.on_canvas_hover)
+        
+        # Mouse drag functionality
+        self.canvas.bind("<ButtonPress-1>", self.on_mouse_press)
+        self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_mouse_release)
+        
         self.root.bind("<Control-plus>", lambda e: self.zoom_in())
         self.root.bind("<Control-minus>", lambda e: self.zoom_out())
         self.root.bind("<Control-0>", lambda e: self.reset_view())
         self.root.bind("<Escape>", lambda e: self.clear_highlights())
     
+    def on_mouse_press(self, event):
+        """Handle mouse press for drag start"""
+        self.drag_start_x = event.x
+        self.drag_start_y = event.y
+        self.drag_start_pan_x = self.pan_x
+        self.drag_start_pan_y = self.pan_y
+        self.is_dragging = True
+    
+    def on_mouse_drag(self, event):
+        """Handle mouse drag for panning"""
+        if hasattr(self, 'is_dragging') and self.is_dragging:
+            # Calculate drag distance
+            dx = event.x - self.drag_start_x
+            dy = event.y - self.drag_start_y
+            
+            # Update pan position
+            self.pan_x = self.drag_start_pan_x + dx
+            self.pan_y = self.drag_start_pan_y + dy
+            
+            # Redraw topology with new pan position
+            self.draw_topology()
+    
+    def on_mouse_release(self, event):
+        """Handle mouse release for drag end"""
+        self.is_dragging = False
+    
     def draw_topology(self):
         """Draw the complete topology"""
-        self.canvas.delete("all")
+        # Delete all canvas items EXCEPT floating controls and hover overlay
+        for item in self.canvas.find_all():
+            tags = self.canvas.gettags(item)
+            if 'floating_controls' not in tags and 'hover_overlay' not in tags:
+                self.canvas.delete(item)
+        
         self.node_positions.clear()
         self.node_items.clear()
         self.edge_items.clear()
@@ -734,6 +839,18 @@ class RicoBitVisualizer:
         self._draw_ring_circles()  # Draw ring circles FIRST
         self._draw_connections()   # Then tree connections
         self._draw_nodes()          # Finally nodes on top
+        
+        # Ensure floating controls are properly positioned after redraw
+        if hasattr(self, 'floating_controls') and self.floating_controls:
+            try:
+                canvas_width = self.canvas.winfo_width()
+                if canvas_width > 1:
+                    control_width = 60  # fallback width
+                    x_pos = canvas_width - control_width - 10
+                    y_pos = 10
+                    self.canvas.coords(self.floating_controls, x_pos, y_pos)
+            except:
+                pass
     
     def _calculate_positions_concentric(self):
         """Calculate node positions in PERFECTLY CIRCULAR concentric rings like reference.py"""
@@ -742,8 +859,8 @@ class RicoBitVisualizer:
         center_x = canvas_width / 2
         center_y = canvas_height / 2
         
-        # Calculate spacing for perfect circular rings
-        max_radius = min(canvas_width, canvas_height) * 0.40
+        # Calculate spacing for perfect circular rings with larger radius for better node visibility
+        max_radius = min(canvas_width, canvas_height) * 0.48  # Increased to 0.48 for much better spacing
         ring_spacing = max_radius / max(1, self.num_levels - 1) if self.num_levels > 1 else max_radius
         
         # Place center node at origin (Ring 0)
@@ -773,8 +890,8 @@ class RicoBitVisualizer:
         center_x = canvas_width / 2
         center_y = canvas_height / 2
         
-        # Calculate spacing matching position calculation
-        max_radius = min(canvas_width, canvas_height) * 0.40
+        # Calculate spacing matching position calculation with larger radius
+        max_radius = min(canvas_width, canvas_height) * 0.48  # Increased to 0.48 for much better spacing
         ring_spacing = max_radius / max(1, self.num_levels - 1) if self.num_levels > 1 else max_radius
         
         # Draw ring circles for each level (except center node which is Ring 0)
@@ -861,14 +978,16 @@ class RicoBitVisualizer:
             if addr in self.highlighted_nodes:
                 color = self.colors['highlight']
             
-            r = 12 * self.zoom_level
+            # Ensure minimum visible size for nodes
+            r = max(8, 12 * self.zoom_level)  # Minimum 8 pixels radius for visibility
             node_id = self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r, 
                                              fill=color, outline=self.colors['node_border'], width=2)
             
             R, Nr = addr
             label = f"({R},{Nr})"
-            # Use dark text on light background
-            text_id = self.canvas.create_text(cx, cy - r - 15, text=label, 
+            # Adjust text position based on zoom level for better visibility
+            text_offset = max(20, r + 15)  # Minimum 20 pixels offset
+            text_id = self.canvas.create_text(cx, cy - text_offset, text=label, 
                                              fill='#2c3e50', font=("Arial", 9, "bold"))
             
             self.node_items[addr] = node_id
@@ -889,7 +1008,9 @@ class RicoBitVisualizer:
                 cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
                 dist = math.sqrt((event.x - cx)**2 + (event.y - cy)**2)
                 
-                if dist < 15:
+                # Scale click detection radius with zoom level (minimum 15 pixels)
+                click_radius = max(15, 12 * self.zoom_level + 5)  # Node radius + 5 pixel margin
+                if dist < click_radius:
                     clicked_node = addr
                     break
         
@@ -934,7 +1055,7 @@ class RicoBitVisualizer:
             self.root.after(2000, self.clear_highlights)
     
     def on_canvas_hover(self, event):
-        """Handle canvas hover for node details display with 2-second delay"""
+        """Handle canvas hover for node details display with 500ms delay"""
         # Find node under cursor
         hovered_node = None
         for addr, item_id in self.node_items.items():
@@ -944,7 +1065,9 @@ class RicoBitVisualizer:
                 cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
                 dist = math.sqrt((event.x - cx)**2 + (event.y - cy)**2)
                 
-                if dist < 15:
+                # Scale hover detection radius with zoom level (same as click detection)
+                hover_radius = max(15, 12 * self.zoom_level + 5)
+                if dist < hover_radius:
                     hovered_node = addr
                     break
         
@@ -955,36 +1078,198 @@ class RicoBitVisualizer:
                 self.root.after_cancel(self.hover_timer)
                 self.hover_timer = None
             
-            # Close existing hover window
-            if self.hover_window and hovered_node is None:
-                self._close_hover_window()
+            # Close existing hover overlay
+            if self.hover_overlay and hovered_node is None:
+                self._close_hover_overlay()
             
             # Update hover node
             self.hover_node = hovered_node
             
-            # Start new timer if hovering over a node
+            # Start new timer if hovering over a node (reduced to 500ms)
             if hovered_node:
-                self.hover_timer = self.root.after(2000, lambda: self._show_hover_node_info(hovered_node))
+                self.hover_timer = self.root.after(500, lambda: self._show_hover_node_info(hovered_node, event.x, event.y))
     
-    def _show_hover_node_info(self, addr):
-        """Show detailed node information in a hover window (non-modal)"""
+    def _show_hover_node_info(self, addr, mouse_x, mouse_y):
+        """Show detailed node information in a canvas overlay (non-modal, stays until closed)"""
         if self.hover_node != addr:
             return  # Node changed, don't show
         
-        # Close existing hover window
-        if self.hover_window:
-            self._close_hover_window()
+        # Close existing hover overlay
+        if self.hover_overlay:
+            self._close_hover_overlay()
         
-        self._show_detailed_node_info(addr, is_hover=True)
+        # Create canvas overlay near the node
+        node = self.topology.nodes[addr]
+        R, Nr = addr
+        
+        # Get node position on canvas
+        if addr in self.node_positions:
+            node_x, node_y = self.node_positions[addr]
+            canvas_x, canvas_y = self._transform_coords(node_x, node_y)
+        else:
+            canvas_x, canvas_y = mouse_x, mouse_y
+        
+        # Create overlay frame
+        overlay_width = 350
+        overlay_height = 400
+        
+        # Position overlay to the right of the node, or left if too close to edge
+        canvas_width = self.canvas.winfo_width()
+        if canvas_x + overlay_width + 20 < canvas_width:
+            overlay_x = canvas_x + 30
+        else:
+            overlay_x = canvas_x - overlay_width - 30
+        
+        overlay_y = max(10, min(canvas_y - overlay_height // 2, 
+                                self.canvas.winfo_height() - overlay_height - 10))
+        
+        # Create frame on canvas
+        overlay_frame = tk.Frame(self.canvas, bg='white', relief=tk.RAISED, bd=3)
+        overlay_frame.configure(highlightbackground='#2c3e50', highlightthickness=2)
+        
+        # Header with close button
+        header = tk.Frame(overlay_frame, bg='#2c3e50', height=40)
+        header.pack(fill=tk.X)
+        header.pack_propagate(False)
+        
+        # Title
+        tk.Label(header, text=f"NODE ({R},{Nr})", 
+                font=("Arial", 12, "bold"), bg='#2c3e50', fg='white').pack(side=tk.LEFT, padx=10, pady=8)
+        
+        # Close button
+        close_btn = tk.Button(header, text="✖", command=self._close_hover_overlay,
+                             bg='#e74c3c', fg='white', font=("Arial", 10, "bold"),
+                             relief=tk.FLAT, cursor="hand2", padx=6, pady=2,
+                             activebackground='#c0392b', bd=0)
+        close_btn.pack(side=tk.RIGHT, padx=5, pady=5)
+        
+        # Content area with scrollbar
+        content_container = tk.Frame(overlay_frame, bg='white')
+        content_container.pack(fill=tk.BOTH, expand=True)
+        
+        canvas_inner = tk.Canvas(content_container, bg='white', highlightthickness=0, 
+                                height=overlay_height - 50, width=overlay_width - 20)
+        scrollbar = tk.Scrollbar(content_container, orient=tk.VERTICAL, command=canvas_inner.yview)
+        scrollable_content = tk.Frame(canvas_inner, bg='white')
+        
+        scrollable_content.bind("<Configure>", 
+            lambda e: canvas_inner.configure(scrollregion=canvas_inner.bbox("all")))
+        
+        canvas_inner.create_window((0, 0), window=scrollable_content, anchor="nw")
+        canvas_inner.configure(yscrollcommand=scrollbar.set)
+        
+        canvas_inner.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Add node information sections (compact version)
+        self._add_compact_info_section(scrollable_content, "📊 Basic Info", 
+                                      self._format_basic_info_compact(node, addr), '#e8f4f8')
+        
+        self._add_compact_info_section(scrollable_content, "🔗 Connections", 
+                                      self._format_neighbors_compact(node, addr), '#f4f6f7')
+        
+        self._add_compact_info_section(scrollable_content, "📦 Buffers", 
+                                      self._format_buffer_compact(node), '#fff3e0')
+        
+        if self.current_packet and addr in self.current_path:
+            self._add_compact_info_section(scrollable_content, "🎯 Routing", 
+                                          self._format_packet_routing_compact(addr), '#fce4ec')
+        
+        # Create the overlay window on canvas
+        self.hover_overlay = self.canvas.create_window(overlay_x, overlay_y, 
+                                                       window=overlay_frame, anchor='nw',
+                                                       tags='hover_overlay')
+        self.hover_overlay_items.append(self.hover_overlay)
+        
+        # Make overlay draggable
+        self._make_overlay_draggable(overlay_frame)
     
-    def _close_hover_window(self):
-        """Close the hover window"""
-        if self.hover_window:
+    def _add_compact_info_section(self, parent, title, content, bg_color):
+        """Create a compact information section for the overlay"""
+        section = tk.Frame(parent, bg=bg_color, relief=tk.FLAT, bd=1)
+        section.pack(fill=tk.X, padx=5, pady=3)
+        
+        # Title
+        tk.Label(section, text=title, font=("Arial", 9, "bold"),
+                bg=bg_color, fg='#2c3e50', anchor='w').pack(fill=tk.X, padx=8, pady=3)
+        
+        # Content
+        tk.Label(section, text=content, font=('Courier New', 8),
+                bg='white', fg='#2c3e50', justify=tk.LEFT, 
+                anchor='nw').pack(fill=tk.X, padx=8, pady=3)
+    
+    def _format_basic_info_compact(self, node, addr):
+        """Format basic node information (compact)"""
+        R, Nr = addr
+        return f"Ring: {R} | Pos: {Nr} | Size: {2**R}\nConnections: {len(node.interfaces)}"
+    
+    def _format_neighbors_compact(self, node, addr):
+        """Format neighbors information (compact)"""
+        R, Nr = addr
+        ring_neighbors = [n for n in node.interfaces.keys() if n[0] == R]
+        tree_neighbors = [n for n in node.interfaces.keys() if n[0] != R]
+        
+        info = ""
+        if ring_neighbors:
+            info += f"Ring: {len(ring_neighbors)} nodes\n"
+        if tree_neighbors:
+            info += f"Tree: {len(tree_neighbors)} nodes\n"
+            info += "  " + ", ".join([f"({n[0]},{n[1]})" for n in sorted(tree_neighbors)[:3]])
+            if len(tree_neighbors) > 3:
+                info += f" +{len(tree_neighbors)-3}"
+        return info
+    
+    def _format_buffer_compact(self, node):
+        """Format buffer status (compact)"""
+        total_send = sum(len(iface.send_buffer.buffer) for iface in node.interfaces.values())
+        total_recv = sum(len(iface.receive_buffer.buffer) for iface in node.interfaces.values())
+        app_buf = len(node.application_logic_buffer)
+        
+        info = f"Send: {total_send} | Recv: {total_recv}"
+        if app_buf > 0:
+            info += f"\nApp Buffer: {app_buf} delivered"
+        return info
+    
+    def _format_packet_routing_compact(self, addr):
+        """Format packet routing information (compact)"""
+        hop_index = self.current_path.index(addr)
+        return f"Hop {hop_index + 1}/{len(self.current_path)}\n{self.current_path[0]} → {self.current_path[-1]}"
+    
+    def _make_overlay_draggable(self, frame):
+        """Make overlay frame draggable"""
+        frame._drag_data = {"x": 0, "y": 0}
+        
+        def on_press(event):
+            frame._drag_data["x"] = event.x
+            frame._drag_data["y"] = event.y
+        
+        def on_drag(event):
+            dx = event.x - frame._drag_data["x"]
+            dy = event.y - frame._drag_data["y"]
+            
+            # Get current position
+            x, y = self.canvas.coords(self.hover_overlay)
+            
+            # Move the overlay
+            self.canvas.coords(self.hover_overlay, x + dx, y + dy)
+        
+        # Bind to header only for dragging
+        for child in frame.winfo_children():
+            if isinstance(child, tk.Frame) and child.cget('bg') == '#2c3e50':
+                child.bind("<Button-1>", on_press)
+                child.bind("<B1-Motion>", on_drag)
+                break
+    
+    def _close_hover_overlay(self):
+        """Close the hover overlay"""
+        if self.hover_overlay:
             try:
-                self.hover_window.destroy()
+                self.canvas.delete(self.hover_overlay)
             except:
                 pass
-            self.hover_window = None
+            self.hover_overlay = None
+            self.hover_overlay_items.clear()
+            self.hover_node = None
     
     def _highlight_selected_node(self, addr, node_type):
         """Highlight selected node temporarily"""
@@ -1437,13 +1722,9 @@ Interfaces:     {len(node.interfaces)} connections
                 # SOURCE NODE - 3 phases
                 self._animate_source_node(addr, next_addr, cx, cy, path, interface_state)
                 
-            elif index < len(path) - 1:
-                # INTERMEDIATE NODE - 5 phases
+            elif next_addr is not None:
+                # INTERMEDIATE NODE (including last hop to destination) - 5 phases
                 self._animate_intermediate_node(addr, next_addr, cx, cy, path, index, interface_state)
-                
-            else:
-                # DESTINATION NODE - 2 phases
-                self._animate_destination_node(addr, cx, cy, path, index, interface_state)
             
             # Visual highlight nodes and edges
             if addr in self.node_items:
@@ -1465,13 +1746,52 @@ Interfaces:     {len(node.interfaces)} connections
         
         animate_step(0)
     
+    def _get_arc_points_for_hop(self, start_node, end_node):
+        """Get arc points for a hop if it's a ring connection, None otherwise
+        
+        Args:
+            start_node: (ring, node_nr) tuple
+            end_node: (ring, node_nr) tuple
+            
+        Returns:
+            List of (x, y) transformed canvas coordinates if ring hop, None otherwise
+        """
+        start_R, start_Nr = start_node
+        end_R, end_Nr = end_node
+        
+        # Check if this is a ring hop (same ring)
+        if start_R != end_R or start_R == 0:
+            return None
+        
+        # Look up arc segment from arc renderer
+        key = (start_R, start_Nr, end_Nr)
+        
+        if key not in self.arc_renderer.ring_arc_segments:
+            return None
+        
+        arc_data = self.arc_renderer.ring_arc_segments[key]
+        points = arc_data['points']
+        
+        # Transform all points to canvas coordinates
+        transformed_points = []
+        for x, y in points:
+            cx, cy = self._transform_coords(x, y)
+            transformed_points.append((cx, cy))
+        
+        return transformed_points
+    
     def _animate_source_node(self, addr, next_addr, cx, cy, path, interface_state):
         """Animate source node packet creation and initial send"""
         self.transfer_phase = "Packet Created"
         self.signal_status = "Idle → REQ"
         
+        # Get node and interface for clock tracking
+        node = self.topology.nodes[addr]
+        interface = node.interfaces.get(next_addr)
+        clk = 0  # Initial clock
+        
         self._update_flow_analysis(f"\n--- HOP 1/{len(path)-1}: Source Node {addr} ---")
-        self._update_flow_analysis("PHASE 1: Packet Creation")
+        self._update_flow_analysis(f"[clk={clk}] Packet Creation")
         self._update_flow_analysis("  • Application creates packet")
         self._update_flow_analysis(f"  • Destination set to {path[-1]}")
         
@@ -1485,33 +1805,103 @@ Interfaces:     {len(node.interfaces)} connections
         # Visual: Show packet created at source
         self.packet_animator.draw_packet_at_node(cx, cy, phase='created')
         
-        # After short delay, show routing phase with updated state
+        # Get next node position
+        nx, ny = self.node_positions[next_addr]
+        ncx, ncy = self._transform_coords(nx, ny)
+        
+        # Get arc points if this is a ring hop
+        arc_points = self._get_arc_points_for_hop(addr, next_addr)
+        
+        # After short delay, show routing phase
         def show_routing():
             self.transfer_phase = "Routing"
             self.signal_status = "Computing"
-            self._update_flow_analysis("PHASE 2: Routing Logic")
+            clk_routing = clk + 1
+            self._update_flow_analysis(f"[clk={clk_routing}] Routing Logic")
             self._update_flow_analysis(f"  • Next hop determined: {next_addr}")
             self._update_flow_analysis("  • Packet placed in Send Buffer")
             
-            # Update with REQ=1 as handshake begins
             routing_state = {
-                'req': 1, 'ack': 0, 'busy': 0, 'transfer': 0,
+                'req': 0, 'ack': 0, 'busy': 0, 'transfer': 0,
                 'send_buf': '1/4', 'recv_buf': '0/4'
             }
             self._update_status_bar(current_node=addr, next_node=next_addr, interface_state=routing_state)
             self.packet_animator.draw_node_activity_ring(cx, cy, activity='processing')
         
-        self.root.after(int(self.animation_speed * 0.3), show_routing)
+        self.root.after(int(self.animation_speed * 0.2), show_routing)
+        
+        # Show REQ phase with arc-aware animation
+        def show_req():
+            self.transfer_phase = "REQ"
+            self.signal_status = "REQ=1"
+            clk_req = clk + 2
+            self._update_flow_analysis(f"[clk={clk_req}] Request (REQ)")
+            self._update_flow_analysis(f"  • pin_REQ = 1 ({addr} → {next_addr})")
+            self._update_flow_analysis("  • Direction: Source → Destination")
+            self._update_flow_analysis(f"  • Waiting for ACK from {next_addr}")
+            
+            # Update with REQ=1 as handshake begins
+            req_state = {
+                'req': 1, 'ack': 0, 'busy': 0, 'transfer': 0,
+                'send_buf': '1/4', 'recv_buf': '0/4'
+            }
+            self._update_status_bar(current_node=addr, next_node=next_addr, interface_state=req_state)
+            
+            # Show REQ arrow with arc path (source to dest)
+            self.packet_animator.draw_transfer_arrow(cx, cy, ncx, ncy, phase='req', arc_points=arc_points)
+        
+        self.root.after(int(self.animation_speed * 0.4), show_req)
+        
+        # Show ACK phase with arc-aware animation
+        def show_ack():
+            self.transfer_phase = "ACK"
+            self.signal_status = "ACK=1"
+            clk_ack = clk + 3
+            self._update_flow_analysis(f"[clk={clk_ack}] Acknowledgment (ACK)")
+            self._update_flow_analysis(f"  • pin_ACK = 1 ({next_addr} → {addr})")
+            self._update_flow_analysis("  • Direction: Destination → Source")
+            self._update_flow_analysis("  • Channel ready for data transfer")
+            
+            # Update with ACK=1
+            ack_state = {
+                'req': 1, 'ack': 1, 'busy': 1, 'transfer': 0,
+                'send_buf': '1/4', 'recv_buf': '0/4'
+            }
+            self._update_status_bar(current_node=addr, next_node=next_addr, interface_state=ack_state)
+            
+            # Show ACK arrow with arc path (dest to source - will be reversed in draw_transfer_arrow)
+            self.packet_animator.draw_transfer_arrow(cx, cy, ncx, ncy, phase='ack', arc_points=arc_points)
+        
+        self.root.after(int(self.animation_speed * 0.6), show_ack)
     
     def _animate_intermediate_node(self, addr, next_addr, cx, cy, path, index, interface_state):
         """Animate intermediate node with detailed handshake and transfer phases"""
-        self._update_flow_analysis(f"\n--- HOP {index + 1}/{len(path)-1}: Intermediate Node {addr} ---")
+        # Check if next_addr is the final destination
+        is_last_hop = (next_addr == path[-1])
         
-        # Phase 1: Handshake Request
-        self.transfer_phase = "Handshake"
+        if is_last_hop:
+            # This is the last hop to the destination
+            self._update_flow_analysis(f"\n--- HOP {index + 1}/{len(path)-1}: {addr} → Destination {next_addr} ---")
+        else:
+            # Regular intermediate hop
+            self._update_flow_analysis(f"\n--- HOP {index + 1}/{len(path)-1}: Intermediate Node {addr} ---")
+        
+        # Get next node position
+        nx, ny = self.node_positions[next_addr]
+        ncx, ncy = self._transform_coords(nx, ny)
+        
+        # Get arc points if this is a ring hop
+        arc_points = self._get_arc_points_for_hop(addr, next_addr)
+        
+        # Clock tracking for this hop
+        base_clk = index * 5  # Each hop takes approximately 5 clock cycles
+        
+        # Phase 1: REQ (Request) - Animated arrow along path
+        self.transfer_phase = "REQ"
         self.signal_status = "REQ=1"
-        self._update_flow_analysis("PHASE 1: Handshake Request")
-        self._update_flow_analysis("  • pin_REQ = 1 (Request to send)")
+        self._update_flow_analysis(f"[clk={base_clk}] Request (REQ)")
+        self._update_flow_analysis(f"  • pin_REQ = 1 ({addr} → {next_addr})")
+        self._update_flow_analysis("  • Direction: Source → Destination")
         self._update_flow_analysis(f"  • Waiting for ACK from {next_addr}")
         
         # Show REQ=1, ACK=0
@@ -1521,19 +1911,17 @@ Interfaces:     {len(node.interfaces)} connections
         }
         self._update_status_bar(current_node=addr, next_node=next_addr, interface_state=handshake_state_1)
         
-        # Get next node position
-        nx, ny = self.node_positions[next_addr]
-        ncx, ncy = self._transform_coords(nx, ny)
-        
-        # Show handshake arrow
-        self.packet_animator.draw_transfer_arrow(cx, cy, ncx, ncy, phase='handshake')
+        # Show REQ arrow with arc path (source to dest)
+        self.packet_animator.draw_transfer_arrow(cx, cy, ncx, ncy, phase='req', arc_points=arc_points)
         self.packet_animator.draw_node_activity_ring(cx, cy, activity='busy')
         
-        # Phase 2: Acknowledgment (after 1/5 of time)
+        # Phase 2: ACK (Acknowledgment) - Opposite direction animated arrow
         def show_ack():
-            self.signal_status = "REQ=1, ACK=1"
-            self._update_flow_analysis("PHASE 2: Acknowledgment Received")
-            self._update_flow_analysis("  • pin_ACK = 1 (Ready to receive)")
+            self.transfer_phase = "ACK"
+            self.signal_status = "ACK=1"
+            self._update_flow_analysis(f"[clk={base_clk + 1}] Acknowledgment (ACK)")
+            self._update_flow_analysis(f"  • pin_ACK = 1 ({next_addr} → {addr})")
+            self._update_flow_analysis("  • Direction: Destination → Source")
             self._update_flow_analysis("  • bit_Busy = 1 (Channel locked)")
             
             # Show REQ=1, ACK=1, Busy=1
@@ -1542,6 +1930,10 @@ Interfaces:     {len(node.interfaces)} connections
                 'send_buf': '1/4', 'recv_buf': '0/4'
             }
             self._update_status_bar(current_node=addr, next_node=next_addr, interface_state=handshake_state_2)
+            
+            # Show ACK arrow with arc path (dest to source - will be reversed)
+            self.packet_animator.draw_transfer_arrow(cx, cy, ncx, ncy, phase='ack', arc_points=arc_points)
+            self.packet_animator.draw_node_activity_ring(ncx, ncy, activity='ready')
         
         self.root.after(int(self.animation_speed * 0.2), show_ack)
         
@@ -1549,8 +1941,9 @@ Interfaces:     {len(node.interfaces)} connections
         def show_data_transfer():
             self.transfer_phase = "Transferring"
             self.signal_status = "pin_DATA active"
-            self._update_flow_analysis("PHASE 3: Data Transfer")
+            self._update_flow_analysis(f"[clk={base_clk + 2}] Data Transfer")
             self._update_flow_analysis("  • Send Register → pin_DATA")
+            self._update_flow_analysis(f"  • Direction: {addr} → {next_addr}")
             self._update_flow_analysis("  • Data transmitted to next node")
             
             # Show Transfer=1
@@ -1560,7 +1953,7 @@ Interfaces:     {len(node.interfaces)} connections
             }
             self._update_status_bar(current_node=addr, next_node=next_addr, interface_state=transfer_state)
             
-            self.packet_animator.draw_transfer_arrow(cx, cy, ncx, ncy, phase='data')
+            self.packet_animator.draw_transfer_arrow(cx, cy, ncx, ncy, phase='data', arc_points=arc_points)
             self.packet_animator.draw_packet_at_node(cx, cy, phase='sending')
         
         self.root.after(int(self.animation_speed * 0.4), show_data_transfer)
@@ -1569,7 +1962,7 @@ Interfaces:     {len(node.interfaces)} connections
         def show_reception():
             self.transfer_phase = "Receiving"
             self.signal_status = "bit_Receive=1"
-            self._update_flow_analysis("PHASE 4: Reception at Next Node")
+            self._update_flow_analysis(f"[clk={base_clk + 3}] Reception at Next Node")
             self._update_flow_analysis("  • pin_DATA → Receive Register")
             self._update_flow_analysis("  • Packet placed in Receive Buffer")
             
@@ -1588,10 +1981,23 @@ Interfaces:     {len(node.interfaces)} connections
         def show_routing_check():
             self.transfer_phase = "Routing"
             self.signal_status = "Checking dest"
-            self._update_flow_analysis("PHASE 5: Routing Decision")
-            self._update_flow_analysis(f"  • Dest {path[-1]} ≠ Current {addr}")
-            self._update_flow_analysis(f"  • Next hop determined: {next_addr}")
-            self._update_flow_analysis("  • Handshake reset (REQ=0, ACK=0)")
+            
+            # Check if this is the final destination
+            is_final_dest = (next_addr == path[-1])
+            
+            if is_final_dest:
+                # This packet reached its final destination
+                self._update_flow_analysis(f"[clk={base_clk + 4}] Final Delivery")
+                self._update_flow_analysis(f"  • Dest {path[-1]} = Current {next_addr} ✓")
+                self._update_flow_analysis(f"  • Packet successfully reached destination")
+                self._update_flow_analysis("  • Packet → Application Logic Buffer")
+                self._update_flow_analysis("  • Transfer complete!")
+            else:
+                # Continue routing to next hop
+                self._update_flow_analysis(f"[clk={base_clk + 4}] Routing Decision")
+                self._update_flow_analysis(f"  • Dest {path[-1]} ≠ Current {addr}")
+                self._update_flow_analysis(f"  • Next hop determined: {next_addr}")
+                self._update_flow_analysis("  • Handshake reset (REQ=0, ACK=0)")
             
             # Reset handshake
             reset_state = {
@@ -1609,10 +2015,16 @@ Interfaces:     {len(node.interfaces)} connections
         self.transfer_phase = "Delivering"
         self.signal_status = "Final ACK"
         
-        self._update_flow_analysis(f"\n--- HOP {index + 1}/{len(path)-1}: Destination Node {addr} ---")
-        self._update_flow_analysis("PHASE 1: Final Handshake")
+        # Clock tracking for destination
+        base_clk = index * 5
+        
+        # Fix: This is the last hop, so it should be HOP {index+1}/{index+1}
+        total_hops = index + 1
+        self._update_flow_analysis(f"\n--- HOP {total_hops}/{total_hops}: Destination Node {addr} ---")
+        self._update_flow_analysis(f"[clk={base_clk}] Final Handshake")
         self._update_flow_analysis("  • Handshake completed")
         self._update_flow_analysis(f"  • Dest {path[-1]} = Current {addr} ✓")
+        self._update_flow_analysis(f"  • Packet successfully reached destination")
         
         # Show final handshake state
         final_handshake = {
@@ -1625,9 +2037,10 @@ Interfaces:     {len(node.interfaces)} connections
         def show_final_delivery():
             self.transfer_phase = "Completed"
             self.signal_status = "Delivered"
-            self._update_flow_analysis("PHASE 2: Delivery to Application")
+            self._update_flow_analysis(f"[clk={base_clk + 1}] Delivery to Application")
             self._update_flow_analysis("  • Packet → Application Logic Buffer")
             self._update_flow_analysis("  • Transfer complete!")
+            self._update_flow_analysis(f"  • Final destination: {addr}")
             
             # All cleared after delivery
             delivered_state = {
@@ -1759,13 +2172,37 @@ Interfaces:     {len(node.interfaces)} connections
         self.draw_topology()
     
     def zoom_in(self):
-        """Zoom in"""
-        self.zoom_level = min(3.0, self.zoom_level * 1.2)
+        """Zoom in from center"""
+        canvas_center_x = self.canvas.winfo_width() / 2
+        canvas_center_y = self.canvas.winfo_height() / 2
+        
+        # Calculate zoom factor
+        zoom_factor = 1.2
+        old_zoom = self.zoom_level
+        new_zoom = min(30.0, old_zoom * zoom_factor)  # Increased zoom limit by 10x
+        
+        # Adjust pan to zoom from center
+        self.pan_x = canvas_center_x - (canvas_center_x - self.pan_x) * (new_zoom / old_zoom)
+        self.pan_y = canvas_center_y - (canvas_center_y - self.pan_y) * (new_zoom / old_zoom)
+        
+        self.zoom_level = new_zoom
         self.draw_topology()
     
     def zoom_out(self):
-        """Zoom out"""
-        self.zoom_level = max(0.3, self.zoom_level / 1.2)
+        """Zoom out from center"""
+        canvas_center_x = self.canvas.winfo_width() / 2
+        canvas_center_y = self.canvas.winfo_height() / 2
+        
+        # Calculate zoom factor
+        zoom_factor = 1.2
+        old_zoom = self.zoom_level
+        new_zoom = max(0.3, old_zoom / zoom_factor)
+        
+        # Adjust pan to zoom from center
+        self.pan_x = canvas_center_x - (canvas_center_x - self.pan_x) * (new_zoom / old_zoom)
+        self.pan_y = canvas_center_y - (canvas_center_y - self.pan_y) * (new_zoom / old_zoom)
+        
+        self.zoom_level = new_zoom
         self.draw_topology()
     
     def on_mousewheel(self, event):

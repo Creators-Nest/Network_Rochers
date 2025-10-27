@@ -41,8 +41,8 @@ class ArcRenderer:
         center_x = canvas_width / 2
         center_y = canvas_height / 2
         
-        # Calculate ring spacing
-        max_radius = min(canvas_width, canvas_height) * 0.40
+        # Calculate ring spacing - MUST match visualizer.py for consistency
+        max_radius = min(canvas_width, canvas_height) * 0.48  # Increased to 0.48 for much better spacing
         ring_spacing = max_radius / max(1, num_levels - 1) if num_levels > 1 else max_radius
         
         # For each ring (skip ring 0 - center node has no ring)

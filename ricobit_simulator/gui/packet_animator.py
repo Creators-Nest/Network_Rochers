@@ -100,13 +100,21 @@ class PacketAnimator:
         
         return packet_id
     
-    def draw_transfer_arrow(self, x1, y1, x2, y2, phase="handshake"):
-        """Draw animated arrow showing data transfer direction
+    def draw_transfer_arrow(self, x1, y1, x2, y2, phase="handshake", arc_points=None):
+        """Draw animated arrow showing data transfer direction with NS3-like moving animation
         
         Phases:
         - 'handshake': Dotted line (REQ/ACK phase)
-        - 'data': Solid arrow (data transfer)
+        - 'req': REQ arrow (source to dest) - ANIMATED
+        - 'ack': ACK arrow (dest to source) - ANIMATED
+        - 'data': Solid arrow (data transfer) - ANIMATED
         - 'complete': Green arrow (transfer complete)
+        
+        Args:
+            x1, y1: Start coordinates
+            x2, y2: End coordinates
+            phase: Transfer phase
+            arc_points: Optional list of (x,y) tuples for curved path
         """
         # Clear previous arrows
         for item in self.current_arrow_items:
@@ -116,96 +124,311 @@ class PacketAnimator:
                 pass
         self.current_arrow_items.clear()
         
-        # Calculate arrow parameters
-        dx = x2 - x1
-        dy = y2 - y1
-        length = math.sqrt(dx*dx + dy*dy)
-        
-        if length < 1:
-            return
-        
-        # Normalize direction
-        dx /= length
-        dy /= length
+        # Use arc points if provided, otherwise straight line
+        if arc_points and len(arc_points) > 2:
+            path_points = arc_points
+        else:
+            path_points = [(x1, y1), (x2, y2)]
         
         # Arrow styling based on phase
         if phase == 'handshake':
             color = '#3498db'
             width = 2
             dash = (5, 5)
-            arrow = None
+            animate = False
+        elif phase == 'req':
+            # REQ: Blue arrow from source to destination
+            color = '#2196F3'
+            width = 3
+            dash = None
+            animate = True
+        elif phase == 'ack':
+            # ACK: Green arrow from destination to source (reverse direction)
+            color = '#4CAF50'
+            width = 3
+            dash = None
+            animate = True
+            # Reverse the path for ACK
+            path_points = list(reversed(path_points))
         elif phase == 'data':
             color = '#f39c12'
             width = 4
             dash = None
-            arrow = tk.LAST
+            animate = True
         elif phase == 'complete':
             color = '#27ae60'
             width = 3
             dash = None
-            arrow = tk.LAST
+            animate = False
         else:
             color = '#95a5a6'
             width = 2
             dash = None
-            arrow = None
+            animate = False
         
-        # Draw the arrow/line
-        if dash:
+        # Draw the path (static background)
+        if len(path_points) == 2:
+            # Straight line
             line_id = self.canvas.create_line(
-                x1, y1, x2, y2,
-                fill=color,
+                path_points[0][0], path_points[0][1],
+                path_points[1][0], path_points[1][1],
+                fill='#d0d0d0',  # Light gray background
                 width=width,
-                dash=dash,
+                dash=dash if not animate else None,
                 tags='transfer_arrow'
             )
+            self.current_arrow_items.append(line_id)
+            self.animation_items.append(line_id)
         else:
+            # Curved path - flatten points for create_line
+            flat_points = []
+            for px, py in path_points:
+                flat_points.extend([px, py])
+            
             line_id = self.canvas.create_line(
-                x1, y1, x2, y2,
-                fill=color,
+                *flat_points,
+                fill='#d0d0d0',  # Light gray background
                 width=width,
-                arrow=arrow,
-                arrowshape=(16, 20, 6),
+                smooth=True,
                 tags='transfer_arrow'
             )
+            self.current_arrow_items.append(line_id)
+            self.animation_items.append(line_id)
         
-        self.current_arrow_items.append(line_id)
-        self.animation_items.append(line_id)
-        
-        # Add phase label
-        mid_x = (x1 + x2) / 2
-        mid_y = (y1 + y2) / 2
-        
+        # Phase labels - Position in the MIDDLE between nodes, away from path
         phase_labels = {
             'handshake': 'REQ/ACK',
+            'req': 'REQ',
+            'ack': 'ACK',
             'data': 'DATA',
             'complete': 'DONE'
         }
         label_text = phase_labels.get(phase, '')
         
         if label_text:
-            # Create background for text
-            bg_id = self.canvas.create_rectangle(
-                mid_x - 30, mid_y - 12,
-                mid_x + 30, mid_y + 12,
-                fill='white',
-                outline=color,
-                width=2,
-                tags='transfer_arrow'
-            )
-            
-            text_id = self.canvas.create_text(
-                mid_x, mid_y,
-                text=label_text,
-                font=('Arial', 9, 'bold'),
-                fill=color,
-                tags='transfer_arrow'
-            )
-            
-            self.current_arrow_items.extend([bg_id, text_id])
-            self.animation_items.extend([bg_id, text_id])
+            # Calculate midpoint between start and end nodes (not on path curve)
+            if len(path_points) >= 2:
+                # Use straight line midpoint between first and last point
+                start_x, start_y = path_points[0]
+                end_x, end_y = path_points[-1]
+                
+                # Direct midpoint (not following the curve)
+                mid_x = (start_x + end_x) / 2
+                mid_y = (start_y + end_y) / 2
+                
+                # Calculate direction vector from start to end
+                dx = end_x - start_x
+                dy = end_y - start_y
+                length = math.sqrt(dx*dx + dy*dy)
+                
+                if length > 0:
+                    # Normalize direction
+                    dx /= length
+                    dy /= length
+                    
+                    # Perpendicular vector (rotated 90 degrees counter-clockwise)
+                    perp_x = -dy
+                    perp_y = dx
+                    
+                    # Offset to position label to the side of the straight line between nodes
+                    offset = 35
+                    
+                    # Position label away from the direct line between nodes
+                    label_x = mid_x + perp_x * offset
+                    label_y = mid_y + perp_y * offset
+                else:
+                    label_x = mid_x
+                    label_y = mid_y
+                
+                # No arrow marks - just plain text
+                display_text = label_text
+                
+                text_width = len(display_text) * 8 + 12
+                
+                # Create background for text
+                bg_id = self.canvas.create_rectangle(
+                    label_x - text_width//2, label_y - 11,
+                    label_x + text_width//2, label_y + 11,
+                    fill='white',
+                    outline=color,
+                    width=2,
+                    tags='transfer_arrow'
+                )
+                
+                text_id = self.canvas.create_text(
+                    label_x, label_y,
+                    text=display_text,
+                    font=('Arial', 10, 'bold'),
+                    fill=color,
+                    tags='transfer_arrow'
+                )
+                
+                self.current_arrow_items.extend([bg_id, text_id])
+                self.animation_items.extend([bg_id, text_id])
+        
+        # Animate moving arrow if needed (NS3-style)
+        if animate:
+            self._animate_moving_arrow(path_points, color, width)
         
         return line_id
+    
+    def _animate_moving_arrow(self, path_points, color, width, duration=800):
+        """Animate a moving arrow along the path (NS3-style)
+        
+        Args:
+            path_points: List of (x, y) tuples defining the path
+            color: Arrow color
+            width: Arrow width
+            duration: Animation duration in milliseconds
+        """
+        # Number of animation steps
+        steps = 25
+        step_duration = duration // steps
+        
+        # Create the moving arrow
+        arrow_id = None
+        trail_id = None
+        step = [0]  # Use list to allow modification in nested function
+        
+        def animate_step():
+            nonlocal arrow_id, trail_id
+            
+            if step[0] >= steps:
+                # Animation complete, remove arrow
+                if arrow_id:
+                    try:
+                        self.canvas.delete(arrow_id)
+                    except:
+                        pass
+                if trail_id:
+                    try:
+                        self.canvas.delete(trail_id)
+                    except:
+                        pass
+                return
+            
+            # Calculate position along path
+            t = step[0] / (steps - 1)
+            
+            # Find position on path
+            if len(path_points) == 2:
+                # Straight line interpolation
+                x1, y1 = path_points[0]
+                x2, y2 = path_points[1]
+                current_x = x1 + (x2 - x1) * t
+                current_y = y1 + (y2 - y1) * t
+                
+                # Next point for arrow direction
+                if t < 1.0:
+                    next_t = min(1.0, t + 0.05)
+                    next_x = x1 + (x2 - x1) * next_t
+                    next_y = y1 + (y2 - y1) * next_t
+                else:
+                    next_x, next_y = x2, y2
+                    
+                # Previous point for trail
+                if t > 0:
+                    prev_t = max(0.0, t - 0.15)
+                    prev_x = x1 + (x2 - x1) * prev_t
+                    prev_y = y1 + (y2 - y1) * prev_t
+                else:
+                    prev_x, prev_y = x1, y1
+            else:
+                # Curved path interpolation
+                total_length = 0
+                segment_lengths = []
+                for i in range(len(path_points) - 1):
+                    dx = path_points[i+1][0] - path_points[i][0]
+                    dy = path_points[i+1][1] - path_points[i][1]
+                    seg_len = math.sqrt(dx*dx + dy*dy)
+                    segment_lengths.append(seg_len)
+                    total_length += seg_len
+                
+                # Find segment at current t
+                target_dist = t * total_length
+                cumulative = 0
+                current_x, current_y = path_points[0]
+                next_x, next_y = path_points[1] if len(path_points) > 1 else path_points[0]
+                prev_x, prev_y = path_points[0]
+                
+                for i, seg_len in enumerate(segment_lengths):
+                    if cumulative + seg_len >= target_dist:
+                        # Interpolate within this segment
+                        seg_t = (target_dist - cumulative) / seg_len if seg_len > 0 else 0
+                        x1, y1 = path_points[i]
+                        x2, y2 = path_points[i+1]
+                        current_x = x1 + (x2 - x1) * seg_t
+                        current_y = y1 + (y2 - y1) * seg_t
+                        
+                        # Next point
+                        if i + 1 < len(path_points) - 1:
+                            next_x, next_y = path_points[i+2]
+                        else:
+                            next_x, next_y = x2, y2
+                        
+                        # Previous point for trail
+                        if i > 0:
+                            prev_x, prev_y = path_points[i-1]
+                        else:
+                            prev_x, prev_y = x1, y1
+                        break
+                    cumulative += seg_len
+            
+            # Delete previous arrow and trail
+            if arrow_id:
+                try:
+                    self.canvas.delete(arrow_id)
+                except:
+                    pass
+            if trail_id:
+                try:
+                    self.canvas.delete(trail_id)
+                except:
+                    pass
+            
+            # Draw trail line (fade effect)
+            if step[0] > 2:
+                trail_id = self.canvas.create_line(
+                    prev_x, prev_y,
+                    current_x, current_y,
+                    fill=color,
+                    width=width + 2,
+                    tags='moving_arrow_trail'
+                )
+                self.current_arrow_items.append(trail_id)
+            
+            # Draw new arrow at current position
+            arrow_length = 30
+            dx = next_x - current_x
+            dy = next_y - current_y
+            length = math.sqrt(dx*dx + dy*dy)
+            
+            if length > 0:
+                dx /= length
+                dy /= length
+                
+                arrow_start_x = current_x - dx * arrow_length * 0.2
+                arrow_start_y = current_y - dy * arrow_length * 0.2
+                arrow_end_x = current_x + dx * arrow_length * 0.8
+                arrow_end_y = current_y + dy * arrow_length * 0.8
+                
+                arrow_id = self.canvas.create_line(
+                    arrow_start_x, arrow_start_y,
+                    arrow_end_x, arrow_end_y,
+                    arrow=tk.LAST,
+                    fill=color,
+                    width=width + 1,
+                    arrowshape=(14, 18, 6),
+                    tags='moving_arrow'
+                )
+                
+                self.current_arrow_items.append(arrow_id)
+            
+            step[0] += 1
+            self.canvas.after(step_duration, animate_step)
+        
+        # Start animation
+        animate_step()
     
     def draw_node_activity_ring(self, x, y, activity="idle"):
         """Draw activity ring around node to show processing state
