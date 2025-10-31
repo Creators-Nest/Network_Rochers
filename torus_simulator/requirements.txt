@@ -1,0 +1,5 @@
+# No external dependencies required
+# Uses only Python standard library:
+# - tkinter for GUI
+# - collections for deque
+# - math for calculations
