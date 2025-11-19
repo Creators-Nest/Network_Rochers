@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RicoBit Network Visualizer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="home-page">
+    <header class="home-header">
+        <p class="home-brand">RicoBit Visualizer</p>
+        <nav class="home-nav">
+            <a class="ghost-btn" href="https://github.com/Creators-Nest/Network_Rochers" target="_blank" rel="noopener noreferrer">Project repo</a>
+            <a class="primary-btn" href="{{ url_for('simulator') }}">Launch simulator</a>
+        </nav>
+    </header>
+
+    <main class="home-main">
+        <section class="home-hero">
+            <h1>Visualize RiCoBiT routing with clarity</h1>
+            <p>Explore how requests, acknowledgements, and data traverse the RiCoBiT fabric. Configure topologies on the fly and watch every hop animate in real time.</p>
+            <div class="home-actions">
+                <a class="primary-btn" href="{{ url_for('simulator') }}">Start the simulator</a>
+                <a class="ghost-btn" href="#features">See what is inside</a>
+            </div>
+        </section>
+
+        <section id="features" class="home-features" aria-label="Highlights">
+            <article class="home-feature">
+                <h2>Interactive topologies</h2>
+                <p>Dial the number of rings, choose source and destination pairs, and inspect hop-by-hop routes instantly.</p>
+            </article>
+            <article class="home-feature">
+                <h2>Handshake timeline</h2>
+                <p>Track REQ, ACK, and DATA activity through an animated flow log built for teaching and demos.</p>
+            </article>
+            <article class="home-feature">
+                <h2>Web ready experience</h2>
+                <p>Enjoy a mobile friendly layout with zoomable canvas, collapsible controls, and keyboard shortcuts.</p>
+            </article>
+        </section>
+    </main>
+
+    <footer class="home-footer">
+        <p>&copy; {{ current_year }} RicoBit Simulator. Built for Network Rochers.</p>
+    </footer>
+</body>
+</html>

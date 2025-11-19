@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RicoBit Network Visualizer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="simulator-page">
+    <div class="app-shell" id="appShell">
+        <aside class="sidebar" id="layoutSidebar">
+            <header class="sidebar__header">
+                <div class="sidebar__title">
+                    <h1>RicoBit Visualizer</h1>
+                    <p class="tagline">Interactive packet routing on the web.</p>
+                </div>
+                <button id="sidebarClose" class="sidebar-close" type="button" aria-label="Close controls">&times;</button>
+            </header>
+
+            <section class="sidebar__section" aria-labelledby="topology-controls">
+                <h2 id="topology-controls">Topology</h2>
+                <div class="form-control">
+                    <label for="levelInput">Number of rings</label>
+                    <input id="levelInput" type="number" min="2" max="12" value="5">
+                </div>
+                <button id="applyTopologyBtn" class="primary-btn">Apply topology</button>
+            </section>
+
+            <section class="sidebar__section" aria-labelledby="routing-controls">
+                <h2 id="routing-controls">Routing</h2>
+                <div class="form-control">
+                    <label for="sourceSelect">Source node</label>
+                    <select id="sourceSelect"></select>
+                </div>
+                <div class="form-control">
+                    <label for="destinationSelect">Destination node</label>
+                    <select id="destinationSelect"></select>
+                </div>
+                <div class="form-control form-control--inline">
+                    <label for="speedControl">Speed</label>
+                    <input id="speedControl" type="range" min="0.2" max="1.5" step="0.1" value="0.6">
+                </div>
+                <div class="button-row">
+                    <button id="simulateBtn" class="primary-btn">Simulate route</button>
+                    <button id="animateBtn" class="ghost-btn" disabled>Animate path</button>
+                    <button id="resetBtn" class="ghost-btn">Reset</button>
+                </div>
+                <p id="routeSummary" class="summary"></p>
+            </section>
+
+            <section class="sidebar__section" aria-labelledby="flow-timeline">
+                <h2 id="flow-timeline">Flow timeline</h2>
+                <div id="flowLog" class="flow-log" aria-live="polite"></div>
+            </section>
+        </aside>
+
+        <div class="sidebar-overlay" id="sidebarOverlay" aria-hidden="true"></div>
+        <section class="content-region">
+            <header class="status-bar" role="status">
+                <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-expanded="false" aria-controls="layoutSidebar">
+                    <span class="sidebar-toggle__bar"></span>
+                    <span class="sidebar-toggle__bar"></span>
+                    <span class="sidebar-toggle__bar"></span>
+                    <span class="sr-only">Toggle controls</span>
+                </button>
+
+                <div class="status-section">
+                    <p class="status-label">Hop</p>
+                    <p id="statusHopValue" class="status-value">0 / 0</p>
+                    <p id="statusHopNodes" class="status-sub">Select source &amp; destination</p>
+                </div>
+                <div class="status-section status-section--route">
+                    <p class="status-label">Route</p>
+                    <p id="statusRouteValue" class="status-value">Awaiting route computation</p>
+                    <p id="statusTransferValue" class="status-sub">Transfer: —</p>
+                </div>
+                <div class="status-section status-section--phase-progress">
+                    <div class="phase-wrapper">
+                        <div class="phase-header">
+                            <p class="status-label">Phase</p>
+                            <p id="statusPhaseValue" class="status-value">Idle</p>
+                        </div>
+                        <ol class="phase-timeline" id="phaseTimeline" aria-label="Handshake phases">
+                            <li class="phase-step" data-phase-step="Route Ready">Ready</li>
+                            <li class="phase-step" data-phase-step="REQ">REQ</li>
+                            <li class="phase-step" data-phase-step="ACK">ACK</li>
+                            <li class="phase-step" data-phase-step="Transferring">DATA</li>
+                            <li class="phase-step" data-phase-step="Routing">Release</li>
+                        </ol>
+                        <div class="signal-channels" role="group" aria-label="Handshake signals">
+                            <span class="signal-chip" data-signal="req" role="status" aria-label="REQ signal idle">REQ</span>
+                            <span class="signal-chip" data-signal="ack" role="status" aria-label="ACK signal idle">ACK</span>
+                            <span class="signal-chip" data-signal="data" role="status" aria-label="DATA signal idle">DATA</span>
+                        </div>
+                        <p id="statusSignalValue" class="status-sub">Signals: —</p>
+                    </div>
+                    <div class="progress-wrapper">
+                        <div class="status-progress-header">
+                            <p class="status-label">Progress</p>
+                            <span id="statusProgressPercent" class="status-value">0%</span>
+                        </div>
+                        <div class="status-progress-bar" aria-hidden="true">
+                            <span id="statusProgressFill"></span>
+                        </div>
+                        <p id="statusTimerValue" class="status-sub">Timer: 0s</p>
+                    </div>
+                </div>
+            </header>
+
+            <main class="workspace">
+                <div class="canvas-container">
+                    <canvas id="networkCanvas" width="1200" height="900" aria-label="RicoBit topology canvas"></canvas>
+                    <div class="hud" id="hud">
+                        <span id="hudStatus">Idle</span>
+                    </div>
+                    <div class="canvas-controls" role="group" aria-label="View controls">
+                        <button id="cursorModeBtn" type="button" title="Toggle scroll zoom" aria-pressed="false">⊹</button>
+                        <button id="resetViewBtn" type="button" title="Reset view">⟳</button>
+                        <button id="zoomInBtn" type="button" title="Zoom in">＋</button>
+                        <button id="zoomOutBtn" type="button" title="Zoom out">－</button>
+                    </div>
+                </div>
+            </main>
+        </section>
+
+        <aside id="nodeDetailsPanel" class="node-panel" aria-hidden="true">
+        <header class="node-panel__header">
+            <div class="node-panel__heading">
+                <p class="node-panel__eyebrow">Node details</p>
+                <h2 id="nodePanelTitle">(0, 0)</h2>
+                <p id="nodePanelSubhead" class="node-panel__subhead">Select a node to inspect</p>
+            </div>
+            <button id="nodePanelClose" class="node-panel__close" type="button" aria-label="Close node details">×</button>
+        </header>
+
+        <section class="node-panel__section" aria-labelledby="node-panel-summary-label">
+            <h3 id="node-panel-summary-label">Summary</h3>
+            <dl class="node-panel__stats">
+                <div>
+                    <dt>Ring</dt>
+                    <dd id="nodePanelRing">—</dd>
+                </div>
+                <div>
+                    <dt>Degree</dt>
+                    <dd id="nodePanelDegree">—</dd>
+                </div>
+                <div>
+                    <dt>Routing entries</dt>
+                    <dd id="nodePanelRoutes">—</dd>
+                </div>
+            </dl>
+        </section>
+
+        <section class="node-panel__section" aria-labelledby="node-panel-buffers-label">
+            <h3 id="node-panel-buffers-label">Buffers</h3>
+            <ul class="node-panel__buffer-list">
+                <li>
+                    <span>Send</span>
+                    <span id="nodePanelSendBuffer" class="buffer-chip" data-state="idle">Idle</span>
+                </li>
+                <li>
+                    <span>Receive</span>
+                    <span id="nodePanelReceiveBuffer" class="buffer-chip" data-state="idle">Idle</span>
+                </li>
+                <li>
+                    <span>Application</span>
+                    <span id="nodePanelAppBuffer" class="buffer-chip" data-state="idle">0 packets</span>
+                </li>
+                <li>
+                    <span>Handshake</span>
+                    <span id="nodePanelHandshake" class="buffer-chip" data-state="idle">Idle</span>
+                </li>
+            </ul>
+        </section>
+
+        <section class="node-panel__section" aria-labelledby="node-panel-neighbors-label">
+            <h3 id="node-panel-neighbors-label">Links</h3>
+            <ul id="nodePanelNeighbors" class="node-panel__neighbors"></ul>
+        </section>
+        </aside>
+    </div>
+
+    <div id="nodePanelScrim" class="node-panel__scrim" aria-hidden="true"></div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
+</body>
+</html>
