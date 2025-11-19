@@ -1,0 +1,1 @@
+scripts : python -m flask --app ricobit_simulator_web.webapp:create_app run --debug

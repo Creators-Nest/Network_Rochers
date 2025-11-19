@@ -11,98 +11,153 @@
         <aside class="sidebar" id="layoutSidebar">
             <header class="sidebar__header">
                 <div class="sidebar__title">
-                    <h1>RicoBit Visualizer</h1>
+                    <h1>RiCoBit Visualizer</h1>
                     <p class="tagline">Interactive packet routing on the web.</p>
                 </div>
                 <button id="sidebarClose" class="sidebar-close" type="button" aria-label="Close controls">&times;</button>
             </header>
 
-            <section class="sidebar__section" aria-labelledby="topology-controls">
-                <h2 id="topology-controls">Topology</h2>
-                <div class="form-control">
-                    <label for="levelInput">Number of rings</label>
-                    <input id="levelInput" type="number" min="2" max="12" value="5">
-                </div>
-                <button id="applyTopologyBtn" class="primary-btn">Apply topology</button>
-            </section>
+            <div class="sidebar__content">
+                <section class="sidebar__section" aria-labelledby="topology-controls">
+                    <h2 id="topology-controls">Topology</h2>
+                    <div class="form-control">
+                        <label for="levelInput">Number of rings</label>
+                        <input id="levelInput" type="number" min="2" max="11" value="4">
+                    </div>
+                    <button id="applyTopologyBtn" class="primary-btn">Apply topology</button>
+                </section>
 
-            <section class="sidebar__section" aria-labelledby="routing-controls">
-                <h2 id="routing-controls">Routing</h2>
-                <div class="form-control">
-                    <label for="sourceSelect">Source node</label>
-                    <select id="sourceSelect"></select>
-                </div>
-                <div class="form-control">
-                    <label for="destinationSelect">Destination node</label>
-                    <select id="destinationSelect"></select>
-                </div>
-                <div class="form-control form-control--inline">
-                    <label for="speedControl">Speed</label>
-                    <input id="speedControl" type="range" min="0.2" max="1.5" step="0.1" value="0.6">
-                </div>
-                <div class="button-row">
-                    <button id="simulateBtn" class="primary-btn">Simulate route</button>
-                    <button id="animateBtn" class="ghost-btn" disabled>Animate path</button>
-                    <button id="resetBtn" class="ghost-btn">Reset</button>
-                </div>
-                <p id="routeSummary" class="summary"></p>
-            </section>
+                <section class="sidebar__section" aria-labelledby="routing-controls">
+                    <h2 id="routing-controls">Routing</h2>
+                    <div class="form-control">
+                        <label for="sourceSelect">Source node</label>
+                        <div class="input-with-action">
+                            <select id="sourceSelect"></select>
+                            <button id="pickSourceBtn" class="mini-btn" type="button" aria-pressed="false" title="Pick source from canvas">Pick</button>
+                        </div>
+                    </div>
+                    <div class="form-control">
+                        <label for="destinationSelect">Destination node</label>
+                        <div class="input-with-action">
+                            <select id="destinationSelect"></select>
+                            <button id="pickDestinationBtn" class="mini-btn" type="button" aria-pressed="false" title="Pick destination from canvas">Pick</button>
+                        </div>
+                    </div>
+                    <div class="form-control form-control--inline">
+                        <label for="speedControl">Speed</label>
+                        <input id="speedControl" type="range" min="0.2" max="1.5" step="0.1" value="0.6">
+                    </div>
+                    <div class="button-row">
+                        <button id="simulateBtn" class="primary-btn">Simulate route</button>
+                        <button id="animateBtn" class="ghost-btn" disabled>Animate path</button>
+                        <button id="resetBtn" class="ghost-btn">Reset</button>
+                    </div>
+                    <button id="autoNodeDetailsBtn" class="control-toggle" type="button" aria-pressed="false">
+                        <span class="control-toggle__indicator" aria-hidden="true"></span>
+                        <span class="control-toggle__label">
+                            Auto node details
+                            <small class="control-toggle__state">Off</small>
+                        </span>
+                    </button>
+                    <p id="routeSummary" class="summary"></p>
+                </section>
 
-            <section class="sidebar__section" aria-labelledby="flow-timeline">
-                <h2 id="flow-timeline">Flow timeline</h2>
-                <div id="flowLog" class="flow-log" aria-live="polite"></div>
-            </section>
+                <section class="sidebar__section" aria-labelledby="flow-timeline">
+                    <h2 id="flow-timeline">Flow timeline</h2>
+                    <div id="flowLog" class="flow-log" aria-live="polite"></div>
+                </section>
+            </div>
         </aside>
 
         <div class="sidebar-overlay" id="sidebarOverlay" aria-hidden="true"></div>
         <section class="content-region">
             <header class="status-bar" role="status">
-                <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-expanded="false" aria-controls="layoutSidebar">
-                    <span class="sidebar-toggle__bar"></span>
-                    <span class="sidebar-toggle__bar"></span>
-                    <span class="sidebar-toggle__bar"></span>
-                    <span class="sr-only">Toggle controls</span>
-                </button>
+                <div class="status-bar__surface">
+                    <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-expanded="false" aria-controls="layoutSidebar">
+                        <span class="sidebar-toggle__bar"></span>
+                        <span class="sidebar-toggle__bar"></span>
+                        <span class="sidebar-toggle__bar"></span>
+                        <span class="sr-only">Toggle controls</span>
+                    </button>
 
-                <div class="status-section">
-                    <p class="status-label">Hop</p>
-                    <p id="statusHopValue" class="status-value">0 / 0</p>
-                    <p id="statusHopNodes" class="status-sub">Select source &amp; destination</p>
-                </div>
-                <div class="status-section status-section--route">
-                    <p class="status-label">Route</p>
-                    <p id="statusRouteValue" class="status-value">Awaiting route computation</p>
-                    <p id="statusTransferValue" class="status-sub">Transfer: —</p>
-                </div>
-                <div class="status-section status-section--phase-progress">
-                    <div class="phase-wrapper">
-                        <div class="phase-header">
-                            <p class="status-label">Phase</p>
-                            <p id="statusPhaseValue" class="status-value">Idle</p>
-                        </div>
-                        <ol class="phase-timeline" id="phaseTimeline" aria-label="Handshake phases">
-                            <li class="phase-step" data-phase-step="Route Ready">Ready</li>
-                            <li class="phase-step" data-phase-step="REQ">REQ</li>
-                            <li class="phase-step" data-phase-step="ACK">ACK</li>
-                            <li class="phase-step" data-phase-step="Transferring">DATA</li>
-                            <li class="phase-step" data-phase-step="Routing">Release</li>
-                        </ol>
-                        <div class="signal-channels" role="group" aria-label="Handshake signals">
-                            <span class="signal-chip" data-signal="req" role="status" aria-label="REQ signal idle">REQ</span>
-                            <span class="signal-chip" data-signal="ack" role="status" aria-label="ACK signal idle">ACK</span>
-                            <span class="signal-chip" data-signal="data" role="status" aria-label="DATA signal idle">DATA</span>
-                        </div>
-                        <p id="statusSignalValue" class="status-sub">Signals: —</p>
-                    </div>
-                    <div class="progress-wrapper">
-                        <div class="status-progress-header">
-                            <p class="status-label">Progress</p>
-                            <span id="statusProgressPercent" class="status-value">0%</span>
-                        </div>
-                        <div class="status-progress-bar" aria-hidden="true">
-                            <span id="statusProgressFill"></span>
-                        </div>
-                        <p id="statusTimerValue" class="status-sub">Timer: 0s</p>
+                    <div class="status-grid">
+                        <section class="status-card status-card--compact status-card--hop" aria-live="polite">
+                            <div class="hop-row">
+                                <div class="hop-row__item--primary">
+                                    <p class="status-label">Hop</p>
+                                    <h6 id="statusHopValue" class="hop-row__value">0 / 0</h6>
+                                </div>
+                                <div class="hop-row__item">
+                                    <p class="status-label">SIGNALS</p>
+                                    <span id="statusSignalValue" class="status-sub"></span>
+                                    
+                                </div>
+                                <div class="hop-row__item">
+                                    <p class="status-label">Transfer</p>
+                                    <p id="statusTransferValue" class="hop-row__text">Transfer: —</p>
+                                </div>
+                            </div>
+
+                            <div class="phase-stack">
+                                <div class="phase-header">
+                                    
+                                </div>
+                                <ol class="phase-tracker" id="phaseTimeline" aria-label="Handshake phases">
+                                    <li class="phase-tracker__step" data-phase="ready">
+                                        <span class="phase-tracker__icon phase-tracker__icon--ready" aria-hidden="true">
+                                            <svg viewBox="0 0 20 20" focusable="false"><circle cx="10" cy="10" r="6" /></svg>
+                                        </span>
+                                        <span class="phase-tracker__label">Ready</span>
+                                    </li>
+                                    <li class="phase-tracker__step" data-phase="req">
+                                        <span class="phase-tracker__icon phase-tracker__icon--req" aria-hidden="true">
+                                            <svg viewBox="0 0 20 20" focusable="false"><path d="M5 10h10M11 6l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                        </span>
+                                        <span class="phase-tracker__label">REQ</span>
+                                    </li>
+                                    <li class="phase-tracker__step" data-phase="ack">
+                                        <span class="phase-tracker__icon phase-tracker__icon--ack" aria-hidden="true">
+                                            <svg viewBox="0 0 20 20" focusable="false"><path d="M15 10H5M9 6l-4 4 4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                        </span>
+                                        <span class="phase-tracker__label">ACK</span>
+                                    </li>
+                                    <li class="phase-tracker__step" data-phase="data">
+                                        <span class="phase-tracker__icon phase-tracker__icon--data" aria-hidden="true">
+                                            <svg viewBox="0 0 20 20" focusable="false"><rect x="5" y="7" width="10" height="6" rx="2" /></svg>
+                                        </span>
+                                        <span class="phase-tracker__label">DATA</span>
+                                    </li>
+                                    <li class="phase-tracker__step" data-phase="release">
+                                        <span class="phase-tracker__icon phase-tracker__icon--release" aria-hidden="true">
+                                            <svg viewBox="0 0 20 20" focusable="false"><path d="M7 5h6v6a4 4 0 01-4 4H5" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 3l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                        </span>
+                                        <span class="phase-tracker__label">Release</span>
+                                    </li>
+                                </ol>
+                            </div>
+                        </section>
+                        
+
+                        <section class="status-card status-card--timeline status-card--phase" aria-live="polite">
+                            <p class="status-label">Route :  <span id="statusRouteValue" class="status-value">Awaiting route computation</span></p>
+                           
+                            
+                            <div class="progress-wrapper">
+                            
+                                <p class="status-label" >Src & Des :<span id="statusHopNodes" class="hop-row__text"></span></p>
+                                <div class="status-progress-header">
+
+                                    <p class="status-label">Progress : <span id="statusPhaseValue" class="status-value">Idle</span></p>
+                                    <span id="statusProgressPercent" class="status-value">0%</span>
+                                </div>
+                                <div class="status-progress-bar" aria-hidden="true">
+                                    <span id="statusProgressFill"></span>
+                                </div>
+                                <p id="statusTimerValue" class="status-sub">Timer: 0s</p>
+                            </div>
+                        </section>
+
+                        
                     </div>
                 </div>
             </header>

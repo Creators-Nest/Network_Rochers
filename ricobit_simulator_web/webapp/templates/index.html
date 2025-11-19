@@ -4,45 +4,918 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RicoBit Network Visualizer</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+    <style>
+        /* Reset and Base Styles */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #FFFFFF;
+            background: #000000;
+            overflow-x: hidden;
+            position: relative;
+        }
+        .page-gradient {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: 
+                radial-gradient(circle at 30% 90%, #007ACC 0%, transparent 40%),
+                radial-gradient(circle at 70% 10%, #00D4FF 0%, transparent 40%),
+                radial-gradient(circle at 50% 50%, rgba(0, 212, 255, 0.03) 0%, transparent 50%),
+                linear-gradient(180deg, transparent 0%, rgba(0, 212, 255, 0.05) 50%, transparent 100%);
+            opacity: 0.1;
+            z-index: -1;
+            animation: gradientShift 15s ease-in-out infinite;
+        }
+        @keyframes gradientShift {
+            0%, 100% { opacity: 0.1; }
+            50% { opacity: 0.15; }
+        }
+        .hero-beam {
+            position: fixed;
+            top: 0;
+            left: 50%;
+            width: 2px;
+            height: 100%;
+            background: linear-gradient(180deg, transparent, #00D4FF, transparent);
+            transform: translateX(-50%);
+            opacity: 0.2;
+            z-index: -1;
+            animation: beamPulse 4s ease-in-out infinite;
+        }
+        @keyframes beamPulse {
+            0%, 100% { opacity: 0.2; }
+            50% { opacity: 0.3; }
+        }
+        a { text-decoration: none; color: inherit; }
+        .primary-btn {
+            background: linear-gradient(135deg, #00D4FF, #007ACC);
+            color: #000000;
+            padding: 14px 32px;
+            border-radius: 50px;
+            font-weight: 600;
+            font-size: 0.9375rem;
+            letter-spacing: 0.01em;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: inline-block;
+            box-shadow: 0 4px 16px rgba(0, 212, 255, 0.25);
+            position: relative;
+            overflow: hidden;
+        }
+        .primary-btn::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, #007ACC, #00D4FF);
+            opacity: 0;
+            transition: opacity 0.4s ease;
+        }
+        .primary-btn:hover {
+            transform: translateY(-2px) scale(1.02); 
+            box-shadow: 0 8px 32px rgba(0, 212, 255, 0.5);
+        }
+        .primary-btn:hover::before {
+            opacity: 1;
+        }
+        .ghost-btn {
+            color: #00D4FF;
+            border: 1.5px solid rgba(0, 212, 255, 0.5);
+            padding: 12px 28px;
+            border-radius: 50px;
+            font-weight: 500;
+            font-size: 0.9375rem;
+            letter-spacing: 0.01em;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            background: rgba(0, 212, 255, 0.03);
+            backdrop-filter: blur(10px);
+            position: relative;
+            overflow: hidden;
+        }
+        .ghost-btn::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(0, 212, 255, 0.1), rgba(0, 122, 204, 0.1));
+            opacity: 0;
+            transition: opacity 0.4s ease;
+        }
+        .ghost-btn:hover { 
+            background: rgba(0, 212, 255, 0.08); 
+            border-color: #00D4FF;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 24px rgba(0, 212, 255, 0.2);
+        }
+        .ghost-btn:hover::before {
+            opacity: 1;
+        }
+        .eyebrow {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 0.8125rem;
+            color: #00D4FF;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            margin-bottom: 16px;
+            opacity: 0.95;
+            font-weight: 600;
+        }
+        h1 { 
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 4.5rem; 
+            font-weight: 700; 
+            line-height: 1.05; 
+            margin-bottom: 24px; 
+            letter-spacing: -0.03em;
+            background: linear-gradient(135deg, #FFFFFF 0%, #00D4FF 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        h2 { 
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 3rem; 
+            font-weight: 700; 
+            line-height: 1.15; 
+            margin-bottom: 24px;
+            letter-spacing: -0.02em;
+        }
+        h3 { 
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.5rem; 
+            font-weight: 600; 
+            margin-bottom: 16px;
+            letter-spacing: -0.01em;
+        }
+        p { 
+            font-size: 1.0625rem; 
+            margin-bottom: 20px; 
+            opacity: 0.88;
+            line-height: 1.7;
+            font-weight: 400;
+        }
+        ul { list-style: none; padding-left: 0; }
+        li { 
+            margin-bottom: 10px; 
+            padding-left: 28px; 
+            position: relative; 
+            opacity: 0.88;
+            font-size: 1rem;
+            line-height: 1.6;
+        }
+        li:before { 
+            content: '→'; 
+            color: #00D4FF; 
+            position: absolute; 
+            left: 0; 
+            font-weight: 700;
+            font-size: 1.125rem;
+        }
+
+        /* Header */
+        .home-header {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(24px) saturate(180%);
+            border-bottom: 1px solid rgba(0, 212, 255, 0.15);
+            z-index: 100;
+            padding: 18px 0;
+        }
+        .header-inner {
+            max-width: 1240px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 40px;
+        }
+        .brand-pill {
+            display: flex;
+            align-items: center;
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 700;
+            font-size: 1.375rem;
+            color: #FFFFFF;
+            letter-spacing: -0.01em;
+            transition: all 0.3s ease;
+        }
+        .brand-pill:hover {
+            transform: translateX(2px);
+        }
+        .brand-dot {
+            width: 10px;
+            height: 10px;
+            background: #00D4FF;
+            border-radius: 50%;
+            margin-right: 12px;
+            box-shadow: 0 0 12px rgba(0, 212, 255, 0.6);
+            animation: dotPulse 2s ease-in-out infinite;
+        }
+        @keyframes dotPulse {
+            0%, 100% { box-shadow: 0 0 12px rgba(0, 212, 255, 0.6); }
+            50% { box-shadow: 0 0 20px rgba(0, 212, 255, 0.9); }
+        }
+        .home-nav { display: flex; gap: 16px; align-items: center; }
+
+        /* Main Content */
+        .home-main { 
+            padding-top: 100px; 
+            max-width: 1240px; 
+            margin: 0 auto; 
+            padding: 0 40px; 
+        }
+
+        /* Hero Section */
+        .home-hero {
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 80px;
+            align-items: start;
+            margin-bottom: 140px;
+            padding: 100px 0 0;
+            position: relative;
+        }
+        .hero-left { padding-right: 40px; }
+        .hero-subtitle { 
+            font-size: 1.25rem; 
+            margin-bottom: 48px; 
+            max-width: 90%;
+            opacity: 0.85;
+            line-height: 1.75;
+            font-weight: 400;
+        }
+        .home-actions { 
+            display: flex; 
+            gap: 16px; 
+            margin-bottom: 64px; 
+        }
+        .hero-metrics {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            align-items: flex-end;
+        }
+        .metric-card {
+            background: rgba(10, 10, 10, 0.6);
+            backdrop-filter: blur(20px);
+            text-align: center;
+            padding: 24px 28px;
+            border: 1px solid rgba(0, 212, 255, 0.2);
+            border-radius: 20px;
+            min-width: 150px;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+        .metric-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #00D4FF, transparent);
+            opacity: 0;
+            transition: opacity 0.4s ease;
+        }
+        .metric-card:hover {
+            border-color: #00D4FF;
+            background: rgba(0, 212, 255, 0.08);
+            transform: translateY(-4px);
+            box-shadow: 0 12px 32px rgba(0, 212, 255, 0.2);
+        }
+        .metric-card:hover::before {
+            opacity: 1;
+        }
+        .metric-value { 
+            display: block; 
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 2.5rem; 
+            font-weight: 700; 
+            color: #00D4FF; 
+            margin-bottom: 6px;
+            letter-spacing: -0.02em;
+        }
+        .metric-label { 
+            font-size: 0.8125rem; 
+            opacity: 0.7; 
+            letter-spacing: 0.03em;
+            font-weight: 500;
+        }
+        .hero-right { position: relative; }
+        .hero-window {
+            background: rgba(10, 10, 10, 0.7);
+            backdrop-filter: blur(20px);
+            border-radius: 24px;
+            padding: 36px;
+            border: 1px solid rgba(0, 212, 255, 0.25);
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(0, 212, 255, 0.1) inset;
+        }
+        .hero-window::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #00D4FF, transparent);
+            opacity: 0.6;
+        }
+        .window-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 28px;
+            opacity: 0.9;
+        }
+        .window-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            box-shadow: 0 0 6px currentColor;
+            transition: all 0.3s ease;
+        }
+        .window-dot:hover {
+            transform: scale(1.15);
+        }
+        .window-dot:nth-child(1) { background: #FF5F56; }
+        .window-dot:nth-child(2) { background: #FFBD2E; }
+        .window-dot:nth-child(3) { background: #28CA42; }
+        .window-title { 
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875rem; 
+            font-weight: 500; 
+            color: #00D4FF;
+            letter-spacing: 0.02em;
+        }
+        .topology-preview {
+            height: 340px;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: radial-gradient(circle, rgba(0, 212, 255, 0.06) 0%, transparent 70%);
+            border-radius: 16px;
+            overflow: hidden;
+            border: 1px solid rgba(0, 212, 255, 0.15);
+        }
+        .ring {
+            position: absolute;
+            border: 2px dashed rgba(0, 212, 255, 0.3);
+            border-radius: 50%;
+            animation: ringRotate 20s linear infinite;
+        }
+        @keyframes ringRotate {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .ring-outer { 
+            width: 240px; 
+            height: 240px; 
+        }
+        .ring-inner { 
+            width: 150px; 
+            height: 150px; 
+            top: 45px; 
+            left: 45px; 
+            animation-duration: 15s;
+            animation-direction: reverse;
+        }
+        .node {
+            position: absolute;
+            width: 32px;
+            height: 32px;
+            background: #00D4FF;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8125rem;
+            font-weight: 700;
+            color: #000;
+            box-shadow: 0 0 12px rgba(0, 212, 255, 0.6), 0 4px 12px rgba(0, 0, 0, 0.3);
+            transition: all 0.3s ease;
+            animation: nodeFloat 3s ease-in-out infinite;
+        }
+        @keyframes nodeFloat {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-4px); }
+        }
+        .node:hover { 
+            transform: scale(1.15);
+            box-shadow: 0 0 20px rgba(0, 212, 255, 0.9), 0 4px 16px rgba(0, 0, 0, 0.4);
+        }
+        .node-source { 
+            background: #FF5F56; 
+            color: #FFF; 
+            box-shadow: 0 0 16px rgba(255, 95, 86, 0.7), 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+        .node-destination { 
+            background: #28CA42;
+            color: #FFF;
+            box-shadow: 0 0 16px rgba(40, 202, 66, 0.7), 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+        /* Position nodes on rings */
+        .ring-outer .node:nth-child(1) { top: 0; left: 50%; transform: translateX(-50%) translateY(-16px); }
+        .ring-outer .node:nth-child(2) { top: 50%; right: 0; transform: translateY(-50%) translateX(16px); }
+        .ring-outer .node:nth-child(3) { bottom: 0; left: 50%; transform: translateX(-50%) translateY(16px); }
+        .ring-outer .node:nth-child(4) { top: 50%; left: 0; transform: translateY(-50%) translateX(-16px); }
+        .ring-inner .node:nth-child(1) { top: 10px; left: 50%; transform: translateX(-50%); }
+        .ring-inner .node:nth-child(2) { top: 50%; right: 10px; transform: translateY(-50%); }
+        .ring-inner .node:nth-child(3) { bottom: 10px; left: 50%; transform: translateX(-50%); }
+        .packet {
+            position: absolute;
+            background: #00D4FF;
+            color: #000;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            animation: slidePath 4s infinite ease-in-out;
+            box-shadow: 0 4px 16px rgba(0, 212, 255, 0.4);
+        }
+        .packet-req { 
+            top: 20%; 
+            left: -60px; 
+            animation: slideReq 3s infinite linear; 
+        }
+        .packet-ack { 
+            bottom: 40%; 
+            right: -60px; 
+            animation-delay: 1s; 
+            background: #28CA42; 
+            color: #FFF;
+            box-shadow: 0 4px 16px rgba(40, 202, 66, 0.4);
+        }
+        .packet-data { 
+            top: 50%; 
+            left: -60px; 
+            animation-delay: 2s; 
+            background: #FFBD2E; 
+            color: #000;
+            box-shadow: 0 4px 16px rgba(255, 189, 46, 0.4);
+        }
+        @keyframes slideReq { 
+            0% { left: -60px; opacity: 0; } 
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { left: calc(100% + 60px); opacity: 0; } 
+        }
+        .window-footnote { 
+            font-size: 0.8125rem; 
+            opacity: 0.6; 
+            text-align: center; 
+            margin-top: 24px; 
+            font-style: italic;
+            font-weight: 400;
+        }
+
+        /* Section Styles */
+        .home-section {
+            margin-bottom: 140px;
+            padding: 100px 0;
+            position: relative;
+        }
+        .section-header {
+            text-align: left;
+            margin-bottom: 64px;
+            max-width: 800px;
+        }
+        .section-header.center { 
+            text-align: center; 
+            max-width: 900px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .section-body { 
+            max-width: 680px; 
+            margin: 0 auto 64px; 
+            opacity: 0.85; 
+            font-size: 1.125rem;
+            line-height: 1.8;
+        }
+        .card-grid, .steps-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+            gap: 32px;
+        }
+        .card {
+            background: rgba(10, 10, 10, 0.6);
+            backdrop-filter: blur(20px);
+            padding: 44px;
+            border-radius: 24px;
+            border: 1px solid rgba(0, 212, 255, 0.2);
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+            top:50px;
+        }
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, rgba(0, 212, 255, 0.4), transparent);
+            opacity: 0;
+            transition: opacity 0.4s ease;
+        }
+        .card::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at top left, rgba(0, 212, 255, 0.05), transparent);
+            opacity: 0;
+            transition: opacity 0.4s ease;
+        }
+        .card:hover { 
+            border-color: #00D4FF; 
+            transform: translateY(-8px); 
+            box-shadow: 0 20px 60px rgba(0, 212, 255, 0.2);
+            background: rgba(10, 10, 10, 0.8);
+        }
+        .card:hover::before,
+        .card:hover::after {
+            opacity: 1;
+        }
+        .step-card { 
+            text-align: center;
+            padding-top: 60px;
+        }
+        .step-index {
+            position: absolute;
+            top: 20px;
+            margin-top: -15px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(135deg, #00D4FF, #007ACC);
+            color: #000;
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+            font-size: 1.5rem;
+            box-shadow: 0 6px 20px rgba(0, 212, 255, 0.5), 0 0 0 4px rgba(0, 0, 0, 0.8);
+            /* It should be on top of the card */
+            z-index: 1;
+            
+
+            
+        }
+        .cards-row { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); 
+            gap: 32px; 
+            margin-bottom: 64px; 
+        }
+        .card.large { 
+            min-height: 240px; 
+            display: flex; 
+            flex-direction: column; 
+            justify-content: space-between; 
+        }
+        .cta-card {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(10, 10, 10, 0.6);
+            backdrop-filter: blur(20px);
+            padding: 56px;
+            border-radius: 24px;
+            border: 1px solid rgba(0, 212, 255, 0.25);
+            gap: 48px;
+            position: relative;
+            overflow: hidden;
+        }
+        .cta-card::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(0, 212, 255, 0.08), transparent);
+            z-index: -1;
+        }
+        .cta-card div { flex: 1; }
+
+        /* Footer */
+        .home-footer {
+            background: rgba(0, 0, 0, 0.9);
+            backdrop-filter: blur(20px);
+            padding: 56px 0;
+            text-align: center;
+            border-top: 1px solid rgba(0, 212, 255, 0.15);
+        }
+        .footer-note { 
+            opacity: 0.6; 
+            font-size: 0.875rem; 
+            margin-top: 12px; 
+            letter-spacing: 0.02em;
+            font-weight: 400;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 1024px) {
+            .home-hero { 
+                grid-template-columns: 1fr; 
+                gap: 56px; 
+                text-align: center; 
+            }
+            .hero-left { padding-right: 0; order: 2; }
+            .hero-right { order: 1; }
+            .home-actions { justify-content: center; flex-wrap: wrap; }
+            .hero-metrics { justify-content: center; }
+            h1 { font-size: 3.5rem; }
+            h2 { font-size: 2.5rem; }
+            .header-inner { padding: 0 32px; }
+            .home-main { padding: 0 32px; }
+        }
+        @media (max-width: 768px) {
+            .home-section { padding: 64px 0; margin-bottom: 96px; }
+            .card-grid, .steps-grid, .cards-row { grid-template-columns: 1fr; gap: 24px; }
+            .cta-card { 
+                flex-direction: column; 
+                text-align: center; 
+                gap: 32px; 
+                padding: 40px; 
+            }
+            .home-actions { flex-direction: column; align-items: center; gap: 12px; }
+            h1 { font-size: 2.75rem; }
+            h2 { font-size: 2rem; }
+            .topology-preview { height: 280px; }
+            .metric-card { min-width: 130px; padding: 20px 24px; }
+            .card { padding: 32px; }
+        }
+        @media (max-width: 480px) {
+            .home-main { padding: 0 20px; }
+            .header-inner { padding: 0 20px; flex-direction: column; gap: 16px; }
+            .home-nav { flex-direction: row; gap: 12px; width: 100%; justify-content: center; }
+            .brand-pill { font-size: 1.125rem; }
+            h1 { font-size: 2.25rem; }
+        }
+    </style>
 </head>
 <body class="home-page">
+    <div class="page-gradient"></div>
+    <div class="hero-beam"></div>
+    <!-- HEADER -->
     <header class="home-header">
-        <p class="home-brand">RicoBit Visualizer</p>
-        <nav class="home-nav">
-            <a class="ghost-btn" href="https://github.com/Creators-Nest/Network_Rochers" target="_blank" rel="noopener noreferrer">Project repo</a>
-            <a class="primary-btn" href="{{ url_for('simulator') }}">Launch simulator</a>
-        </nav>
+        <div class="header-inner">
+            <a href="{{ url_for('simulator') }}" class="brand-pill">
+                <span class="brand-dot"></span>
+                <span class="brand-text">RicoBit Visualizer</span>
+            </a>
+            <nav class="home-nav">
+                <a class="ghost-btn" href="https://github.com/Creators-Nest/Network_Rochers"
+                   target="_blank" rel="noopener noreferrer">
+                    Project repo
+                </a>
+                <a class="primary-btn" href="{{ url_for('simulator') }}">
+                    Launch simulator
+                </a>
+            </nav>
+        </div>
     </header>
-
     <main class="home-main">
+        <!-- HERO -->
         <section class="home-hero">
-            <h1>Visualize RiCoBiT routing with clarity</h1>
-            <p>Explore how requests, acknowledgements, and data traverse the RiCoBiT fabric. Configure topologies on the fly and watch every hop animate in real time.</p>
-            <div class="home-actions">
-                <a class="primary-btn" href="{{ url_for('simulator') }}">Start the simulator</a>
-                <a class="ghost-btn" href="#features">See what is inside</a>
+            <div class="hero-left">
+                <p class="eyebrow">RiCoBiT · Routing Visualized</p>
+                <h1>Visualize RiCoBiT routing with clarity</h1>
+                <p class="hero-subtitle">
+                    Watch how requests, acknowledgements, and data traverse the RiCoBiT fabric.
+                    Configure rings, pick end-points, and replay the entire handshake — frame by frame.
+                </p>
+                <div class="home-actions">
+                    <a class="primary-btn" href="{{ url_for('simulator') }}">Start the simulator</a>
+                    <a class="ghost-btn" href="#features">See what's inside</a>
+                </div>
+                <div class="hero-metrics">
+                    <div class="metric-card">
+                        <span class="metric-value">10k+</span>
+                        <span class="metric-label">Simulated packets</span>
+                    </div>
+                    <div class="metric-card">
+                        <span class="metric-value">8+</span>
+                        <span class="metric-label">Topology presets</span>
+                    </div>
+                    <div class="metric-card">
+                        <span class="metric-value">Zero</span>
+                        <span class="metric-label">Guesswork in routing demos</span>
+                    </div>
+                </div>
+            </div>
+            <div class="hero-right">
+                <div class="hero-window card dotted">
+                    <div class="window-header">
+                        <span class="window-dot"></span>
+                        <span class="window-dot"></span>
+                        <span class="window-dot"></span>
+                        <p class="window-title">Live RiCoBiT fabric</p>
+                    </div>
+                    <div class="topology-preview">
+                        <div class="ring ring-outer">
+                            <div class="node node-source">S</div>
+                            <div class="node">N1</div>
+                            <div class="node">N2</div>
+                            <div class="node">N3</div>
+                        </div>
+                        <div class="ring ring-inner">
+                            <div class="node">C1</div>
+                            <div class="node node-destination">D</div>
+                            <div class="node">C2</div>
+                        </div>
+                        <div class="packet packet-req">REQ</div>
+                        <div class="packet packet-ack">ACK</div>
+                        <div class="packet packet-data">DATA</div>
+                    </div>
+                    <p class="window-footnote">
+                        Sliding packets are a preview only. Launch the simulator to see the real thing in motion.
+                    </p>
+                </div>
             </div>
         </section>
-
-        <section id="features" class="home-features" aria-label="Highlights">
-            <article class="home-feature">
-                <h2>Interactive topologies</h2>
-                <p>Dial the number of rings, choose source and destination pairs, and inspect hop-by-hop routes instantly.</p>
-            </article>
-            <article class="home-feature">
-                <h2>Handshake timeline</h2>
-                <p>Track REQ, ACK, and DATA activity through an animated flow log built for teaching and demos.</p>
-            </article>
-            <article class="home-feature">
-                <h2>Web ready experience</h2>
-                <p>Enjoy a mobile friendly layout with zoomable canvas, collapsible controls, and keyboard shortcuts.</p>
-            </article>
+        <!-- OVERVIEW -->
+        <section class="home-section">
+            <header class="section-header">
+                <p class="eyebrow">Overview</p>
+                <h2>What is RiCoBiT?</h2>
+                <p class="section-body">
+                    RiCoBiT (Ring-based Communication Bit) is a topology and routing scheme built
+                    around interconnected rings. It focuses on predictable paths, deterministic hop
+                    counts, and a clean separation of control and data traffic.
+                </p>
+            </header>
+            <div class="card-grid">
+                <article class="card dotted">
+                    <h3>Ring-oriented design</h3>
+                    <p>
+                        Nodes are logically placed on one or more rings. This makes routing decisions
+                        straightforward, reduces ambiguity in next-hop selection, and keeps
+                        visualizations intuitive.
+                    </p>
+                </article>
+                <article class="card dotted">
+                    <h3>REQ / ACK / DATA separation</h3>
+                    <p>
+                        Control messages and payloads are clearly separated into request,
+                        acknowledgement, and data transfers — perfect for teaching protocol design
+                        and timing.
+                    </p>
+                </article>
+                <article class="card dotted">
+                    <h3>Built for education & demos</h3>
+                    <p>
+                        Designed for classrooms, workshops, and research demos where you want to slow
+                        down time, highlight paths, and answer "what actually happened?" in seconds.
+                    </p>
+                </article>
+            </div>
+        </section>
+        <!-- FEATURES -->
+        <section id="features" class="home-section">
+            <header class="section-header center">
+                <p class="eyebrow">Highlights</p>
+                <h2>Everything you need to explain a network on a whiteboard — but animated.</h2>
+            </header>
+            <div class="card-grid">
+                <article class="card dotted">
+                    <h3>Interactive topologies</h3>
+                    <p>
+                        Choose ring counts, configure neighbors, and instantly visualize shortest paths
+                        between any source-destination pair.
+                    </p>
+                    <ul class="feature-list">
+                        <li>Multi-ring configurations</li>
+                        <li>Customizable node labels</li>
+                        <li>Live route highlight per packet</li>
+                    </ul>
+                </article>
+                <article class="card dotted">
+                    <h3>Handshake timeline</h3>
+                    <p>
+                        Track REQ, ACK, and DATA activity in a synchronized event log.
+                        Slow down or step through each phase to explain what's going on.
+                    </p>
+                    <ul class="feature-list">
+                        <li>Event-by-event playback</li>
+                        <li>Colored message types</li>
+                        <li>Latency & hop counters</li>
+                    </ul>
+                </article>
+                <article class="card dotted">
+                    <h3>Web-ready experience</h3>
+                    <p>
+                        Responsive, keyboard-accessible, and mobile friendly. Zoom, pan, and toggle
+                        panels without losing the big picture.
+                    </p>
+                    <ul class="feature-list">
+                        <li>Zoomable topology canvas</li>
+                        <li>Collapsible control panel</li>
+                        <li>Keyboard shortcuts for power users</li>
+                    </ul>
+                </article>
+            </div>
+        </section>
+        <!-- FLOW / STEPS -->
+        <section class="home-section">
+            <header class="section-header center">
+                <p class="eyebrow">Flow</p>
+                <h2>How the simulator fits into your workflow</h2>
+            </header>
+            <div class="steps-grid">
+                <article class="card dotted step-card">
+                    <span class="step-index">1</span>
+                    <h3>Configure the fabric</h3>
+                    <p>
+                        Select ring size, layout, and node roles. Set the source and destination and
+                        optionally inject faults or broken links.
+                    </p>
+                </article>
+                <article class="card dotted step-card">
+                    <span class="step-index">2</span>
+                    <h3>Fire the request</h3>
+                    <p>
+                        Launch a REQ and watch it travel hop-by-hop. RiCoBiT's rules determine the
+                        path, while the UI highlights every movement.
+                    </p>
+                </article>
+                <article class="card dotted step-card">
+                    <span class="step-index">3</span>
+                    <h3>Inspect the timeline</h3>
+                    <p>
+                        Use the handshake timeline and event log to explain routing decisions,
+                        timing, and any dropped or rerouted packets.
+                    </p>
+                </article>
+            </div>
+        </section>
+        <!-- USE-CASE SLIDER (like talks/contact screenshots) -->
+        <section class="home-section">
+            <header class="section-header">
+                <p class="eyebrow">Use cases</p>
+                <h2>Perfect for classrooms, labs, and research demos</h2>
+            </header>
+            <div class="cards-row">
+                <article class="card large dotted">
+                    <h3>Teaching networks</h3>
+                    <p>
+                        Use RiCoBiT Visualizer to show students why certain routes are chosen, and how
+                        control messages guarantee reliable delivery.
+                    </p>
+                </article>
+                <article class="card large dotted">
+                    <h3>Protocol prototyping</h3>
+                    <p>
+                        Experiment with custom routing logic, visualize alternative paths, and compare
+                        behavior before you move to hardware.
+                    </p>
+                </article>
+                <article class="card large dotted">
+                    <h3>Live demos & talks</h3>
+                    <p>
+                        Put the simulator on the projector and walk your audience through complex
+                        topologies without drowning them in packet captures.
+                    </p>
+                </article>
+            </div>
+            <div class="cta-card dotted">
+                <div>
+                    <h3>Ready to see routes come alive?</h3>
+                    <p>
+                        Launch the simulator and start exploring RiCoBiT topologies in real time —
+                        straight from your browser.
+                    </p>
+                </div>
+                <a class="primary-btn" href="{{ url_for('simulator') }}">
+                    Launch the simulator
+                </a>
+            </div>
         </section>
     </main>
-
     <footer class="home-footer">
-        <p>&copy; {{ current_year }} RicoBit Simulator. Built for Network Rochers.</p>
+        <p>&copy; {{ current_year }} RicoBit Simulator · Built for Network Rochers.</p>
+        <p class="footer-note">
+            Open-source · Flask backend · Canvas-based visualization
+        </p>
     </footer>
 </body>
 </html>

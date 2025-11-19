@@ -9,6 +9,8 @@ const destinationSelect = document.getElementById('destinationSelect');
 const flowLog = document.getElementById('flowLog');
 const speedControl = document.getElementById('speedControl');
 const summary = document.getElementById('routeSummary');
+const pickSourceBtn = document.getElementById('pickSourceBtn');
+const pickDestinationBtn = document.getElementById('pickDestinationBtn');
 
 const applyTopologyBtn = document.getElementById('applyTopologyBtn');
 const levelInput = document.getElementById('levelInput');
@@ -37,7 +39,8 @@ const nodePanelSendBuffer = document.getElementById('nodePanelSendBuffer');
 const nodePanelReceiveBuffer = document.getElementById('nodePanelReceiveBuffer');
 const nodePanelAppBuffer = document.getElementById('nodePanelAppBuffer');
 const nodePanelHandshake = document.getElementById('nodePanelHandshake');
-const phaseTimelineSteps = Array.from(document.querySelectorAll('[data-phase-step]'));
+const autoNodeDetailsBtn = document.getElementById('autoNodeDetailsBtn');
+const phaseTimelineSteps = Array.from(document.querySelectorAll('[data-phase]'));
 
 const statusElements = {
     hopValue: document.getElementById('statusHopValue'),
@@ -66,11 +69,22 @@ const colors = {
     node: '#1d4ed8',
     nodeHighlight: '#22d3ee',
     nodeSelected: '#f97316',
+    sourceNode: '#16a34a',
+    destinationNode: '#7c3aed',
+    sharedNode: '#0ea5e9',
     phaseReq: '#f59e0b',
     phaseAck: '#6366f1',
     phaseData: '#22c55e',
     phaseRelease: '#0ea5e9',
     text: '#0f172a',
+};
+
+const STAGE_INDICATOR_COLORS = {
+    ready: colors.nodeSelected,
+    req: colors.phaseReq,
+    ack: colors.phaseAck,
+    data: colors.phaseData,
+    release: colors.phaseRelease,
 };
 
 const viewState = {
@@ -103,11 +117,15 @@ const nodePositions = new Map();
 let selectedNodeId = null;
 let scrollZoomEnabled = false;
 let panMoved = false;
-let nodePanelAutoTracking = true;
+let nodePanelAutoTracking = false;
+let autoNodeDetailsPreference = false;
 let routePreview = null;
 let lastRoutePayload = null;
+let pickMode = null;
+let currentSourceId = null;
+let currentDestinationId = null;
 
-const PHASE_SEQUENCE = ['Route Ready', 'REQ', 'ACK', 'Transferring', 'Routing'];
+const PHASE_SEQUENCE = ['ready', 'req', 'ack', 'data', 'release'];
 
 const BUFFER_STATE_LABELS = {
     idle: 'Idle',
@@ -119,6 +137,16 @@ const BUFFER_STATE_LABELS = {
     ready: 'Buffered',
     releasing: 'Releasing',
 };
+
+function levelToRingCount(numLevels) {
+    const safeLevels = Number.isFinite(numLevels) ? numLevels : 0;
+    return Math.max(1, safeLevels - 1);
+}
+
+function ringCountToLevels(ringCount) {
+    const safeRings = Number.isFinite(ringCount) ? ringCount : 1;
+    return Math.trunc(safeRings) + 1;
+}
 
 function makeNodeId(node) {
     return `${node.ring}-${node.index}`;
@@ -162,6 +190,80 @@ function normalizeRange(value, start, end) {
     return clamp((value - start) / (end - start), 0, 1);
 }
 
+function syncSelectionState() {
+    currentSourceId = sourceSelect ? sourceSelect.value || null : null;
+    currentDestinationId = destinationSelect ? destinationSelect.value || null : null;
+}
+
+function setPickMode(mode) {
+    const normalized = mode === 'source' || mode === 'destination' ? mode : null;
+    pickMode = normalized;
+    if (pickSourceBtn) {
+        const active = normalized === 'source';
+        pickSourceBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        pickSourceBtn.classList.toggle('is-active', active);
+    }
+    if (pickDestinationBtn) {
+        const active = normalized === 'destination';
+        pickDestinationBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        pickDestinationBtn.classList.toggle('is-active', active);
+    }
+    if (canvas) {
+        canvas.classList.toggle('is-picking', Boolean(normalized));
+    }
+    if (normalized && hudStatus) {
+        hudStatus.textContent = normalized === 'source'
+            ? 'Click a node to choose the source.'
+            : 'Click a node to choose the destination.';
+    }
+}
+
+function setSelectValue(select, nodeId) {
+    if (!select || !nodeId) {
+        return false;
+    }
+    const option = select.querySelector(`option[value="${nodeId}"]`);
+    if (!option) {
+        return false;
+    }
+    if (select.value !== nodeId) {
+        select.value = nodeId;
+    }
+    return true;
+}
+
+function syncAutoNodeDetailsControl() {
+    if (!autoNodeDetailsBtn) return;
+    const preferred = autoNodeDetailsPreference;
+    const active = nodePanelAutoTracking;
+    autoNodeDetailsBtn.classList.toggle('is-active', preferred);
+    autoNodeDetailsBtn.setAttribute('aria-pressed', preferred ? 'true' : 'false');
+    const stateLabel = autoNodeDetailsBtn.querySelector('.control-toggle__state');
+    if (stateLabel) {
+        if (!preferred) {
+            stateLabel.textContent = 'Off';
+        } else if (preferred && !active) {
+            stateLabel.textContent = 'Paused';
+        } else {
+            stateLabel.textContent = 'On';
+        }
+    }
+}
+
+function setNodePanelAutoTracking(enabled, { persist = false, preferredValue } = {}) {
+    nodePanelAutoTracking = Boolean(enabled);
+    if (persist) {
+        autoNodeDetailsPreference = typeof preferredValue === 'boolean'
+            ? preferredValue
+            : nodePanelAutoTracking;
+    }
+    syncAutoNodeDetailsControl();
+    if (nodePanelAutoTracking && selectedNodeId) {
+        openNodePanel();
+        updateNodePanelContent();
+    }
+}
+
 function applySignalState(states = {}) {
     const merged = {
         req: 'idle',
@@ -185,34 +287,36 @@ function applySignalState(states = {}) {
     });
 }
 
-function updatePhaseTimeline(phase) {
+function updatePhaseTimeline(phaseKey) {
     if (!phaseTimelineSteps.length) return;
     phaseTimelineSteps.forEach((step) => {
-        step.classList.remove('is-current', 'is-past', 'is-active');
+        step.classList.remove('is-current', 'is-complete');
     });
 
-    if (!phase || phase === 'Idle') {
+    if (!phaseKey) {
         return;
     }
 
-    let normalized = phase;
-    if (phase === 'Completed') {
-        normalized = PHASE_SEQUENCE[PHASE_SEQUENCE.length - 1];
+    if (phaseKey === 'completed') {
+        phaseTimelineSteps.forEach((step) => {
+            step.classList.add('is-complete');
+        });
+        return;
     }
 
-    const currentIndex = PHASE_SEQUENCE.indexOf(normalized);
+    const currentIndex = PHASE_SEQUENCE.indexOf(phaseKey);
     if (currentIndex === -1) {
         return;
     }
 
     phaseTimelineSteps.forEach((step) => {
-        const stepPhase = step.dataset.phaseStep;
-        const stepIndex = PHASE_SEQUENCE.indexOf(stepPhase);
+        const stepKey = step.dataset.phase;
+        const stepIndex = PHASE_SEQUENCE.indexOf(stepKey);
         if (stepIndex === -1) return;
-        if (stepIndex === currentIndex) {
-            step.classList.add('is-current', 'is-active');
-        } else if (stepIndex < currentIndex) {
-            step.classList.add('is-past', 'is-active');
+        if (stepIndex < currentIndex) {
+            step.classList.add('is-complete');
+        } else if (stepIndex === currentIndex) {
+            step.classList.add('is-current');
         }
     });
 }
@@ -447,20 +551,52 @@ function focusNode(nodeId, { auto = false, openPanelOnFocus = true } = {}) {
     if (!nodeId) return;
     selectedNodeId = nodeId;
     ensureNodeRuntimeState(nodeId);
-    if (openPanelOnFocus || isNodePanelOpen()) {
+    const shouldOpen = openPanelOnFocus && (nodePanelAutoTracking || !auto);
+    if (shouldOpen || isNodePanelOpen()) {
         updateNodePanelContent();
     }
-    if (openPanelOnFocus) {
+    if (shouldOpen) {
         openNodePanel();
     }
     if (!auto) {
-        nodePanelAutoTracking = false;
+        setNodePanelAutoTracking(false);
     }
 }
 
 function selectNode(nodeId) {
     focusNode(nodeId, { openPanelOnFocus: true });
     renderTopology();
+}
+
+function handleCanvasNodeClick(nodeId) {
+    if (!nodeId) return;
+    if (pickMode === 'source') {
+        const meta = nodeMeta.get(nodeId) || parseSelectValue(nodeId);
+        if (setSelectValue(sourceSelect, nodeId)) {
+            handleSourceSelectChange({
+                announce: true,
+                message: `Source set to ${nodeLabel(meta)} via canvas.`,
+            });
+        } else {
+            selectNode(nodeId);
+        }
+        setPickMode(null);
+        return;
+    }
+    if (pickMode === 'destination') {
+        const meta = nodeMeta.get(nodeId) || parseSelectValue(nodeId);
+        if (setSelectValue(destinationSelect, nodeId)) {
+            handleDestinationSelectChange({
+                announce: true,
+                message: `Destination set to ${nodeLabel(meta)} via canvas.`,
+            });
+        } else {
+            selectNode(nodeId);
+        }
+        setPickMode(null);
+        return;
+    }
+    selectNode(nodeId);
 }
 
 function resizeCanvas() {
@@ -554,13 +690,13 @@ function setStatusIdle(message = 'Select source & destination to begin') {
     statusElements.hopValue.textContent = '0 / 0';
     statusElements.hopNodes.textContent = message;
     statusElements.phaseValue.textContent = 'Idle';
-    statusElements.signalValue.textContent = 'Signals: —';
-    statusElements.transferValue.textContent = 'Transfer: —';
+    statusElements.signalValue.textContent = '';
+    statusElements.transferValue.textContent = '';
     statusElements.progressPercent.textContent = '0%';
     statusElements.progressFill.style.width = '0%';
     statusElements.timerValue.textContent = 'Timer: 0s';
     applySignalState({ req: 'sleep', ack: 'sleep', data: 'sleep' });
-    updatePhaseTimeline('Idle');
+    updatePhaseTimeline(null);
     if (currentRouteInfo) {
         statusElements.routeValue.textContent = currentRouteInfo.routeText;
     } else {
@@ -575,35 +711,41 @@ function updateStatusBar(status) {
     }
     statusElements.hopValue.textContent = status.hopText;
     statusElements.hopNodes.textContent = status.nodesText;
-    statusElements.phaseValue.textContent = status.phaseLabel;
+    const phaseLabel = status.phaseLabel || 'Idle';
+    statusElements.phaseValue.textContent = phaseLabel;
     const signalText = status.signalText || '—';
-    statusElements.signalValue.textContent = `Signals: ${signalText}`;
-    statusElements.transferValue.textContent = status.transferText;
+    statusElements.signalValue.textContent = `${signalText}`;
+    statusElements.transferValue.textContent = status.transferText
+        ? ` ${status.transferText}`
+        : '';
     statusElements.progressPercent.textContent = `${status.progressPercent}%`;
     statusElements.progressFill.style.width = `${status.progressPercent}%`;
     statusElements.timerValue.textContent = `Timer: ${status.timer}s`;
     applySignalState(status.signalStates);
-    updatePhaseTimeline(status.phaseLabel);
+    updatePhaseTimeline(status.phaseKey || null);
     if (currentRouteInfo) {
         statusElements.routeValue.textContent = currentRouteInfo.routeText;
+    } else {
+        statusElements.routeValue.textContent = 'Awaiting route computation';
     }
 }
-    function showRouteReadyStatus(payload) {
-        const hopCount = payload?.hopCount ?? 0;
-        const startNode = Array.isArray(payload?.path) && payload.path.length ? payload.path[0] : null;
-        const endNode = Array.isArray(payload?.path) && payload.path.length ? payload.path[payload.path.length - 1] : null;
-        const nodesText = startNode && endNode ? `${nodeLabel(startNode)} → ${nodeLabel(endNode)}` : 'Route prepared';
-        updateStatusBar({
-            hopText: `0 / ${hopCount}`,
-            nodesText,
-            phaseLabel: 'Route Ready',
-            signalText: 'Idle',
-            signalStates: { req: 'sleep', ack: 'sleep', data: 'sleep' },
-            transferText: 'Press Animate to view handshake',
-            progressPercent: 0,
-            timer: 0,
-        });
-    }
+function showRouteReadyStatus(payload) {
+    const hopCount = payload?.hopCount ?? 0;
+    const startNode = Array.isArray(payload?.path) && payload.path.length ? payload.path[0] : null;
+    const endNode = Array.isArray(payload?.path) && payload.path.length ? payload.path[payload.path.length - 1] : null;
+    const nodesText = startNode && endNode ? `${nodeLabel(startNode)} → ${nodeLabel(endNode)}` : 'Route prepared';
+    updateStatusBar({
+        hopText: `0 / ${hopCount}`,
+        nodesText,
+        phaseKey: 'ready',
+        phaseLabel: 'Ready',
+        signalText: 'Idle',
+        signalStates: { req: 'sleep', ack: 'sleep', data: 'sleep' },
+        transferText: 'Press Animate',
+        progressPercent: 0,
+        timer: 0,
+    });
+}
 
 
 function setRouteInfo(payload) {
@@ -630,6 +772,10 @@ function updateAnimateButton({ disabled, busy = false } = {}) {
 
 function ingestTopologyPayload(data, { resetView = true } = {}) {
     topologyData = data;
+    if (levelInput) {
+        const ringCount = levelToRingCount(data?.numLevels);
+        levelInput.value = `${ringCount}`;
+    }
     nodeMeta.clear();
     if (Array.isArray(data?.nodes)) {
         data.nodes.forEach((node) => {
@@ -651,7 +797,7 @@ function ingestTopologyPayload(data, { resetView = true } = {}) {
     }
 
     selectedNodeId = null;
-    nodePanelAutoTracking = true;
+    setNodePanelAutoTracking(autoNodeDetailsPreference);
     routePreview = null;
     animationState = null;
     lastRoutePayload = null;
@@ -672,6 +818,7 @@ function ingestTopologyPayload(data, { resetView = true } = {}) {
 
     updateAnimateButton({ disabled: true, busy: false });
     populateNodeSelects();
+    syncSelectionState();
     renderTopology();
 }
 
@@ -707,7 +854,7 @@ function fetchTopology() {
         .then((res) => res.json())
         .then((data) => {
             ingestTopologyPayload(data);
-            hudStatus.textContent = `Loaded ${data.numLevels} rings`;
+            hudStatus.textContent = `Loaded ${levelToRingCount(data.numLevels)} rings`;
             setStatusIdle();
         })
         .catch((err) => {
@@ -750,21 +897,45 @@ function drawTreeEdges(layout) {
 function drawNodes(layout) {
     if (!topologyData) return;
     ctx.save();
-    const center = { x: layout.centerX, y: layout.centerY };
     topologyData.nodes.forEach((node) => {
         const nodeId = makeNodeId(node);
         const pos = getNodePosition(node.ring, node.index, layout);
         const zoomRadius = clamp(viewState.zoom, 0.7, 1.6);
         const radius = (node.ring === 0 ? 10 : 6) * zoomRadius;
         nodePositions.set(nodeId, { x: pos.x, y: pos.y, radius });
-        ctx.fillStyle = nodeId === selectedNodeId ? colors.nodeSelected : colors.node;
+        const isSelected = nodeId === selectedNodeId;
+        const isSource = nodeId === currentSourceId;
+        const isDestination = nodeId === currentDestinationId;
+        let fillColor = colors.node;
+        if (isSource && isDestination) {
+            fillColor = colors.sharedNode;
+        } else if (isSource) {
+            fillColor = colors.sourceNode;
+        } else if (isDestination) {
+            fillColor = colors.destinationNode;
+        }
+        if (isSelected) {
+            fillColor = colors.nodeSelected;
+        }
+
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = fillColor;
         ctx.fill();
 
-        if (nodeId === selectedNodeId) {
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+        if (isSelected) {
             ctx.strokeStyle = colors.nodeHighlight;
             ctx.lineWidth = 3;
+            ctx.stroke();
+        } else if (isSource || isDestination) {
+            ctx.strokeStyle = isSource && isDestination
+                ? colors.nodeHighlight
+                : isSource
+                    ? colors.sourceNode
+                    : colors.destinationNode;
+            ctx.lineWidth = 2.4;
             ctx.stroke();
         }
 
@@ -858,17 +1029,18 @@ function drawRoute(state, layout, options = {}) {
     const current = state.currentSegment();
     if (current) {
         const { segment, progress } = current;
-        const point = segmentPointWithAngle(segment, progress, layout, { allowClamp: true });
-
         if (showPhaseIndicators) {
             drawPhaseIndicators(segment, progress, layout);
         }
 
         if (showIndicator) {
-            ctx.beginPath();
-            ctx.fillStyle = colors.nodeHighlight;
-            ctx.arc(point.x, point.y, 9, 0, Math.PI * 2);
-            ctx.fill();
+            const indicator = indicatorInfoForProgress(segment, progress, layout);
+            if (indicator?.point) {
+                ctx.beginPath();
+                ctx.fillStyle = indicator.color;
+                ctx.arc(indicator.point.x, indicator.point.y, indicator.radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
         }
     }
 
@@ -900,21 +1072,29 @@ function segmentPointWithAngle(segment, progress, layout, { reverse = false, all
     const toPos = getNodePosition(toNode.ring, toNode.index, layout);
     const x = fromPos.x + (toPos.x - fromPos.x) * clamp(clampedProgress, 0, 1);
     const y = fromPos.y + (toPos.y - fromPos.y) * clamp(clampedProgress, 0, 1);
-    let angle = Math.atan2(toPos.y - fromPos.y, toPos.x - fromPos.x);
-    if (reverse) {
-        angle += Math.PI;
-    }
+    const angle = Math.atan2(toPos.y - fromPos.y, toPos.x - fromPos.x);
     return { x, y, angle };
 }
 
-function drawArrowHead(point, angle, color, size = 12) {
+function drawFlowArrow(point, angle, color, { length = 26, dashed = false } = {}) {
     ctx.save();
     ctx.translate(point.x, point.y);
     ctx.rotate(angle);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    if (dashed) {
+        ctx.setLineDash([8, 6]);
+    }
+    ctx.beginPath();
+    ctx.moveTo(-length, 0);
+    ctx.lineTo(0, 0);
+    ctx.stroke();
+    ctx.setLineDash([]);
     ctx.beginPath();
     ctx.moveTo(0, 0);
-    ctx.lineTo(-size * 0.65, size * 0.45);
-    ctx.lineTo(-size * 0.65, -size * 0.45);
+    ctx.lineTo(-12, 6.5);
+    ctx.lineTo(-12, -6.5);
     ctx.closePath();
     ctx.fillStyle = color;
     ctx.fill();
@@ -951,14 +1131,14 @@ function drawPhaseIndicators(segment, progress, layout) {
 
     if (progress >= req[0] && progress < req[1]) {
         const t = normalizeRange(progress, req[0], req[1]);
-        const point = segmentPointWithAngle(segment, t, layout);
-        drawArrowHead(point, point.angle, colors.phaseReq, 13);
+        const point = segmentPointWithAngle(segment, t, layout, { allowClamp: true });
+        drawFlowArrow(point, point.angle, colors.phaseReq);
     }
 
     if (progress >= ack[0] && progress < ack[1]) {
         const t = normalizeRange(progress, ack[0], ack[1]);
-        const point = segmentPointWithAngle(segment, t, layout, { reverse: true });
-        drawArrowHead(point, point.angle, colors.phaseAck, 13);
+        const point = segmentPointWithAngle(segment, t, layout, { reverse: true, allowClamp: true });
+        drawFlowArrow(point, point.angle, colors.phaseAck, { dashed: true });
     }
 
     if (progress >= data[0] && progress < data[1]) {
@@ -970,6 +1150,51 @@ function drawPhaseIndicators(segment, progress, layout) {
     if (progress >= release[0]) {
         const destPos = getNodePosition(segment.to.ring, segment.to.index, layout);
         drawReleasePulse(destPos, colors.phaseRelease);
+    }
+}
+
+function indicatorInfoForProgress(segment, progress, layout) {
+    const stage = stageFromProgress(progress);
+    const color = STAGE_INDICATOR_COLORS[stage.key] || colors.nodeHighlight;
+    const samplePhasePoint = (phaseKey, options = {}) => {
+        const bounds = PHASE_RANGES[phaseKey];
+        const t = normalizeRange(progress, bounds[0], bounds[1]);
+        return segmentPointWithAngle(segment, t, layout, { allowClamp: true, ...options });
+    };
+
+    switch (stage.key) {
+        case 'ready':
+            return {
+                stage,
+                point: getNodePosition(segment.from.ring, segment.from.index, layout),
+                radius: 8,
+                color,
+            };
+        case 'req':
+            return null;
+        case 'ack':
+            return null;
+        case 'data':
+            return {
+                stage,
+                point: samplePhasePoint('data'),
+                radius: 10,
+                color,
+            };
+        case 'release':
+            return {
+                stage,
+                point: getNodePosition(segment.to.ring, segment.to.index, layout),
+                radius: 8,
+                color,
+            };
+        default:
+            return {
+                stage,
+                point: segmentPointWithAngle(segment, progress, layout, { allowClamp: true }),
+                radius: 9,
+                color,
+            };
     }
 }
 
@@ -1054,6 +1279,7 @@ class RouteAnimation {
             return {
                 hopText: '0 / 0',
                 nodesText: 'Destination reached',
+                phaseKey: 'completed',
                 phaseLabel: 'Completed',
                 signalText: 'Idle',
                 signalStates: { req: 'sleep', ack: 'sleep', data: 'sleep' },
@@ -1074,7 +1300,8 @@ class RouteAnimation {
         return {
             hopText: `${hopNumber} / ${totalHops}`,
             nodesText: `${nodeLabel(segment.from)} → ${nodeLabel(segment.to)}`,
-            phaseLabel: stage.phase,
+            phaseKey: stage.key,
+            phaseLabel: stage.label,
             signalText: stage.signalText,
             signalStates: stage.signals,
             transferText: stage.transfer,
@@ -1110,15 +1337,17 @@ class RoutePreview {
 function stageFromProgress(progress) {
     if (progress < 0.2) {
         return {
-            phase: 'Route Ready',
-            transfer: 'Preparing send buffer',
+            key: 'ready',
+            label: 'Ready',
+            transfer: 'Buffers primed',
             signalText: 'Idle',
             signals: { req: 'sleep', ack: 'sleep', data: 'sleep' },
         };
     }
     if (progress < 0.4) {
         return {
-            phase: 'REQ',
+            key: 'req',
+            label: 'REQ',
             transfer: 'Source asserts REQ',
             signalText: 'REQ=1',
             signals: { req: 'active', ack: 'sleep', data: 'sleep' },
@@ -1126,7 +1355,8 @@ function stageFromProgress(progress) {
     }
     if (progress < 0.6) {
         return {
-            phase: 'ACK',
+            key: 'ack',
+            label: 'ACK',
             transfer: 'Destination acknowledges',
             signalText: 'REQ=1, ACK=1',
             signals: { req: 'active', ack: 'active', data: 'sleep' },
@@ -1134,15 +1364,17 @@ function stageFromProgress(progress) {
     }
     if (progress < 0.85) {
         return {
-            phase: 'Transferring',
-            transfer: 'Data on link',
+            key: 'data',
+            label: 'DATA',
+            transfer: 'Data moving',
             signalText: 'Transfer=1',
             signals: { req: 'active', ack: 'active', data: 'active' },
         };
     }
     return {
-        phase: 'Routing',
-        transfer: 'Routing tables updated',
+        key: 'release',
+        label: 'Release',
+        transfer: 'Lines releasing',
         signalText: 'Lines releasing',
         signals: { req: 'sleep', ack: 'sleep', data: 'sleep' },
     };
@@ -1157,7 +1389,8 @@ function updateNodeRuntimeFromStatus(status) {
         : null;
 
     if (!status.segment) {
-        if (status.phaseLabel === 'Completed' && finalNode) {
+        const isCompletedPhase = status.phaseKey === 'completed' || status.phaseLabel === 'Completed';
+        if (isCompletedPhase && finalNode) {
             const destId = makeNodeId(finalNode);
             const destState = ensureNodeRuntimeState(destId);
             destState.receiveBuffer = 'delivered';
@@ -1184,32 +1417,34 @@ function updateNodeRuntimeFromStatus(status) {
         finalNode && segment.to.ring === finalNode.ring && segment.to.index === finalNode.index,
     );
 
-    switch (status.phaseLabel) {
-        case 'Route Ready':
+    const phaseKey = status.phaseKey || status.phaseLabel;
+
+    switch (phaseKey) {
+        case 'ready':
             sourceState.sendBuffer = 'primed';
             sourceState.handshake = 'primed';
             targetState.receiveBuffer = 'idle';
             targetState.handshake = 'idle';
             break;
-        case 'REQ':
+        case 'req':
             sourceState.sendBuffer = 'waiting';
             sourceState.handshake = 'waiting';
             targetState.receiveBuffer = targetState.receiveBuffer === 'receiving' ? 'receiving' : 'idle';
             targetState.handshake = 'primed';
             break;
-        case 'ACK':
+        case 'ack':
             sourceState.sendBuffer = 'waiting';
             sourceState.handshake = 'waiting';
             targetState.receiveBuffer = 'primed';
             targetState.handshake = 'receiving';
             break;
-        case 'Transferring':
+        case 'data':
             sourceState.sendBuffer = 'transferring';
             sourceState.handshake = 'transferring';
             targetState.receiveBuffer = 'receiving';
             targetState.handshake = 'receiving';
             break;
-        case 'Routing':
+        case 'release':
             sourceState.sendBuffer = 'idle';
             sourceState.handshake = 'releasing';
             targetState.handshake = 'releasing';
@@ -1221,7 +1456,7 @@ function updateNodeRuntimeFromStatus(status) {
                 targetState.applicationBuffer = 0;
             }
             break;
-        case 'Completed':
+        case 'completed':
             if (isFinalHop) {
                 targetState.receiveBuffer = 'delivered';
                 targetState.applicationBuffer = 1;
@@ -1276,9 +1511,15 @@ function renderFlow(flowEntries) {
         flowLog.appendChild(card);
         flowCardElements.push(card);
     });
+    if (flowLog) {
+        flowLog.scrollTop = 0;
+    }
 }
 
 function parseSelectValue(value) {
+    if (typeof value !== 'string') {
+        return { ring: 0, index: 0 };
+    }
     const [ringStr, indexStr] = value.split('-');
     return {
         ring: parseInt(ringStr, 10),
@@ -1286,8 +1527,40 @@ function parseSelectValue(value) {
     };
 }
 
+function handleSourceSelectChange({ announce = false, message } = {}) {
+    syncSelectionState();
+    const nodeId = currentSourceId;
+    if (!nodeId) return;
+    const meta = nodeMeta.get(nodeId) || parseSelectValue(nodeId);
+    focusNode(nodeId, {
+        auto: nodePanelAutoTracking,
+        openPanelOnFocus: true,
+    });
+    if (announce && hudStatus && meta) {
+        hudStatus.textContent = message || `Source set to ${nodeLabel(meta)}.`;
+    }
+    renderTopology();
+}
+
+function handleDestinationSelectChange({ announce = false, message } = {}) {
+    syncSelectionState();
+    const nodeId = currentDestinationId;
+    if (!nodeId) return;
+    const meta = nodeMeta.get(nodeId) || parseSelectValue(nodeId);
+    focusNode(nodeId, {
+        auto: nodePanelAutoTracking,
+        openPanelOnFocus: true,
+    });
+    if (announce && hudStatus && meta) {
+        hudStatus.textContent = message || `Destination set to ${nodeLabel(meta)}.`;
+    }
+    renderTopology();
+}
+
 function simulateRoute() {
     if (!topologyData) return;
+    setPickMode(null);
+    syncSelectionState();
     if (isMobileSidebar() && isSidebarVisible()) {
         closeSidebar();
     }
@@ -1331,7 +1604,7 @@ function simulateRoute() {
 
 function prepareRoute(payload) {
     resetAllNodeRuntimeState();
-    nodePanelAutoTracking = true;
+    setNodePanelAutoTracking(autoNodeDetailsPreference);
     lastRoutePayload = payload;
     routePreview = new RoutePreview(payload);
     animationState = null;
@@ -1348,7 +1621,10 @@ function prepareRoute(payload) {
         hudStatus.textContent = 'Source and destination are identical.';
     }
     if (Array.isArray(payload.path) && payload.path.length) {
-        focusNode(makeNodeId(payload.path[0]), { auto: true, openPanelOnFocus: false });
+        focusNode(makeNodeId(payload.path[0]), {
+            auto: true,
+            openPanelOnFocus: nodePanelAutoTracking,
+        });
     }
     renderTopology();
 }
@@ -1370,14 +1646,17 @@ function startAnimation(payload) {
     resetAllNodeRuntimeState();
     routePreview = null;
     animationState = new RouteAnimation(payload, speedMultiplier);
-    nodePanelAutoTracking = true;
+    setNodePanelAutoTracking(autoNodeDetailsPreference);
     updateAnimateButton({ disabled: true, busy: true });
     hudStatus.textContent = 'Animating route…';
     const firstNode = Array.isArray(animationState.path) && animationState.path.length
         ? animationState.path[0]
         : null;
     if (firstNode) {
-        focusNode(makeNodeId(firstNode), { auto: true, openPanelOnFocus: false });
+        focusNode(makeNodeId(firstNode), {
+            auto: true,
+            openPanelOnFocus: nodePanelAutoTracking,
+        });
     }
     highlightFlowCard(0);
     renderTopology();
@@ -1394,7 +1673,10 @@ function startAnimation(payload) {
         if (nodePanelAutoTracking && status && status.segment) {
             const autoNode = makeNodeId(status.segment.to);
             if (selectedNodeId !== autoNode) {
-                focusNode(autoNode, { auto: true, openPanelOnFocus: false });
+                focusNode(autoNode, {
+                    auto: true,
+                    openPanelOnFocus: nodePanelAutoTracking,
+                });
             } else if (selectedNodeId) {
                 updateNodePanelContent();
             }
@@ -1408,6 +1690,7 @@ function startAnimation(payload) {
             highlightFlowCard(flowCardElements.length - 1);
             const completedStatus = {
                 ...status,
+                phaseKey: 'completed',
                 phaseLabel: 'Completed',
                 signalText: 'Idle',
                 signalStates: { req: 'sleep', ack: 'sleep', data: 'sleep' },
@@ -1418,7 +1701,10 @@ function startAnimation(payload) {
             updateNodeRuntimeFromStatus(completedStatus);
             if (nodePanelAutoTracking && Array.isArray(payload.path) && payload.path.length) {
                 const destinationNode = payload.path[payload.path.length - 1];
-                focusNode(makeNodeId(destinationNode), { auto: true, openPanelOnFocus: false });
+                focusNode(makeNodeId(destinationNode), {
+                    auto: true,
+                    openPanelOnFocus: nodePanelAutoTracking,
+                });
             }
             routePreview = new RoutePreview(payload);
             animationState = null;
@@ -1444,13 +1730,14 @@ function stopAnimation() {
 
 function resetSimulation() {
     stopAnimation();
+    setPickMode(null);
     summary.textContent = '';
     flowLog.innerHTML = '';
     flowCardElements = [];
     resetAllNodeRuntimeState();
     setStatusIdle();
     hudStatus.textContent = 'Idle';
-    nodePanelAutoTracking = true;
+    setNodePanelAutoTracking(autoNodeDetailsPreference);
     routePreview = null;
     lastRoutePayload = null;
     updateAnimateButton({ disabled: true, busy: false });
@@ -1491,7 +1778,9 @@ canvas.addEventListener('pointerdown', (event) => {
     panState.y = event.clientY;
     panMoved = false;
     canvas.setPointerCapture(event.pointerId);
-    canvas.classList.add('is-panning');
+    if (!pickMode) {
+        canvas.classList.add('is-panning');
+    }
 });
 
 canvas.addEventListener('pointermove', (event) => {
@@ -1525,13 +1814,17 @@ canvas.addEventListener('click', (event) => {
     }
     const nodeId = findNodeAtPosition(event.offsetX, event.offsetY);
     if (nodeId) {
-        selectNode(nodeId);
+        handleCanvasNodeClick(nodeId);
+        return;
     } else if (isNodePanelOverlayMode() && isNodePanelOpen()) {
         closeNodePanel();
     } else if (selectedNodeId) {
         selectedNodeId = null;
         resetNodePanelContent();
         renderTopology();
+    }
+    if (pickMode) {
+        setPickMode(null);
     }
 });
 
@@ -1600,14 +1893,41 @@ if (animateBtn) {
 }
 resetBtn.addEventListener('click', resetSimulation);
 
+if (sourceSelect) {
+    sourceSelect.addEventListener('change', () => {
+        setPickMode(null);
+        handleSourceSelectChange({ announce: true });
+    });
+}
+
+if (destinationSelect) {
+    destinationSelect.addEventListener('change', () => {
+        setPickMode(null);
+        handleDestinationSelectChange({ announce: true });
+    });
+}
+
+if (pickSourceBtn) {
+    pickSourceBtn.addEventListener('click', () => {
+        setPickMode(pickMode === 'source' ? null : 'source');
+    });
+}
+
+if (pickDestinationBtn) {
+    pickDestinationBtn.addEventListener('click', () => {
+        setPickMode(pickMode === 'destination' ? null : 'destination');
+    });
+}
+
 applyTopologyBtn.addEventListener('click', () => {
-    const numLevels = parseInt(levelInput.value, 10);
-    if (!Number.isInteger(numLevels) || numLevels < 2 || numLevels > 12) {
-        hudStatus.textContent = 'Topology level must be 2-12';
+    const requestedRings = parseInt(levelInput.value, 10);
+    if (!Number.isInteger(requestedRings) || requestedRings < 2 || requestedRings > 11) {
+        hudStatus.textContent = 'Ring count must be between 2 and 11';
         return;
     }
 
     hudStatus.textContent = 'Updating topology…';
+    const numLevels = ringCountToLevels(requestedRings);
     fetch('/api/topology', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1621,7 +1941,7 @@ applyTopologyBtn.addEventListener('click', () => {
             }
             ingestTopologyPayload(data);
             setStatusIdle('Topology updated');
-            hudStatus.textContent = `Topology updated to ${numLevels} rings`;
+            hudStatus.textContent = `Topology updated to ${requestedRings} rings`;
         })
         .catch((err) => {
             console.error(err);
@@ -1650,6 +1970,46 @@ if (cursorModeBtn) {
     });
     cursorModeBtn.classList.toggle('is-active', scrollZoomEnabled);
 }
+
+if (autoNodeDetailsBtn) {
+    autoNodeDetailsBtn.addEventListener('click', () => {
+        const isPaused = autoNodeDetailsPreference && !nodePanelAutoTracking;
+        let nextPreferred = autoNodeDetailsPreference;
+        let nextActive = nodePanelAutoTracking;
+
+        if (isPaused) {
+            nextPreferred = true;
+            nextActive = true;
+        } else {
+            nextPreferred = !autoNodeDetailsPreference;
+            nextActive = nextPreferred;
+        }
+
+        setNodePanelAutoTracking(nextActive, { persist: true, preferredValue: nextPreferred });
+
+        if (nextActive) {
+            let focusTarget = selectedNodeId;
+            if (animationState) {
+                const current = animationState.currentSegment();
+                if (current && current.segment) {
+                    focusTarget = makeNodeId(current.segment.to);
+                }
+            }
+            if (!focusTarget && routePreview && Array.isArray(routePreview.path) && routePreview.path.length) {
+                focusTarget = makeNodeId(routePreview.path[0]);
+            }
+            if (!focusTarget && lastRoutePayload && Array.isArray(lastRoutePayload.path) && lastRoutePayload.path.length) {
+                focusTarget = makeNodeId(lastRoutePayload.path[0]);
+            }
+            if (focusTarget) {
+                focusNode(focusTarget, { auto: true, openPanelOnFocus: true });
+            }
+        }
+    });
+}
+
+syncAutoNodeDetailsControl();
+setPickMode(null);
 
 applySignalState({ req: 'sleep', ack: 'sleep', data: 'sleep' });
 syncSidebarForViewport();
