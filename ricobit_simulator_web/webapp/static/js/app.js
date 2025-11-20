@@ -61,22 +61,22 @@ const signalChips = {
 };
 
 const colors = {
-    tree: 'rgba(82, 80, 80, 0.35)',
-    treeHighlight: '#38bdf8',
-    ringHighlight: '#38bdf8',
-    previewTree: 'rgba(56, 189, 248, 0.45)',
-    previewRing: 'rgba(56, 189, 248, 0.45)',
-    node: '#1d4ed8',
-    nodeHighlight: '#22d3ee',
+    tree: 'rgba(104, 104, 103, 0.23)',
+    treeHighlight: 'rgba(0, 0, 0, 0.88)',
+    ringHighlight: 'rgba(0, 0, 0, 0.88)',
+    previewTree: 'rgba(0, 0, 0, 0.88)',
+    previewRing: 'rgba(0, 0, 0, 0.88)',
+    node: '#0148c2e5',
+    nodeHighlight: '#000000ff',
     nodeSelected: '#f97316',
     sourceNode: '#16a34a',
-    destinationNode: '#7c3aed',
+    destinationNode: '#b80000ff',
     sharedNode: '#0ea5e9',
-    phaseReq: '#f59e0b',
-    phaseAck: '#6366f1',
+    phaseReq: '#cc6403ff',
+    phaseAck: '#0148c2e5',
     phaseData: '#22c55e',
     phaseRelease: '#0ea5e9',
-    text: '#0f172a',
+    text: '#454545ae',
 };
 
 const STAGE_INDICATOR_COLORS = {
@@ -1223,13 +1223,27 @@ function renderTopology() {
     }
 }
 
+// Replace the RouteAnimation class with this updated version
+// that properly waits for each handshake phase
+
 class RouteAnimation {
     constructor(payload, speed) {
         this.path = payload.path || [];
         this.segments = payload.segments || [];
         this.flow = payload.flow || [];
         this.speed = speed;
-        this.durationPerSegment = 1800 / speed;
+        
+        // Each segment has 5 phases with different durations
+        // ready: 10%, req: 10%, ack: 10%, data: 50%, release: 20%
+        this.phaseDurations = {
+            ready: 200 / speed,    // Quick ready phase
+            req: 300 / speed,      // REQ signal propagation
+            ack: 300 / speed,      // Wait for ACK
+            data: 800 / speed,     // Data transfer (longest)
+            release: 200 / speed   // Release phase
+        };
+        
+        this.totalSegmentDuration = Object.values(this.phaseDurations).reduce((a, b) => a + b, 0);
         this.startTimestamp = null;
         this.progress = 0;
         this.elapsedMs = 0;
@@ -1244,13 +1258,47 @@ class RouteAnimation {
             this.progress = 1;
             return;
         }
-        const totalDuration = this.durationPerSegment * this.segments.length;
+        const totalDuration = this.totalSegmentDuration * this.segments.length;
         const normalized = Math.min(this.elapsedMs / totalDuration, 1);
         this.progress = normalized * this.segments.length;
     }
 
     segmentProgress(index) {
-        return clamp(this.progress - index, 0, 1);
+        const rawProgress = this.progress - index;
+        if (rawProgress <= 0) return 0;
+        if (rawProgress >= 1) return 1;
+        
+        // Map linear progress to phase-based progress
+        const elapsed = rawProgress * this.totalSegmentDuration;
+        let accumulatedTime = 0;
+        
+        // Calculate which phase we're in
+        if (elapsed < (accumulatedTime += this.phaseDurations.ready)) {
+            // Ready phase: 0 to 0.2
+            return 0.2 * (elapsed / this.phaseDurations.ready);
+        }
+        if (elapsed < (accumulatedTime += this.phaseDurations.req)) {
+            // REQ phase: 0.2 to 0.4
+            const phaseProgress = (elapsed - (accumulatedTime - this.phaseDurations.req)) / this.phaseDurations.req;
+            return 0.2 + (0.2 * phaseProgress);
+        }
+        if (elapsed < (accumulatedTime += this.phaseDurations.ack)) {
+            // ACK phase: 0.4 to 0.6
+            const phaseProgress = (elapsed - (accumulatedTime - this.phaseDurations.ack)) / this.phaseDurations.ack;
+            return 0.4 + (0.2 * phaseProgress);
+        }
+        if (elapsed < (accumulatedTime += this.phaseDurations.data)) {
+            // DATA phase: 0.6 to 0.85
+            const phaseProgress = (elapsed - (accumulatedTime - this.phaseDurations.data)) / this.phaseDurations.data;
+            return 0.6 + (0.25 * phaseProgress);
+        }
+        if (elapsed < (accumulatedTime += this.phaseDurations.release)) {
+            // Release phase: 0.85 to 1.0
+            const phaseProgress = (elapsed - (accumulatedTime - this.phaseDurations.release)) / this.phaseDurations.release;
+            return 0.85 + (0.15 * phaseProgress);
+        }
+        
+        return 1;
     }
 
     currentSegment() {
@@ -1313,7 +1361,6 @@ class RouteAnimation {
         };
     }
 }
-
 class RoutePreview {
     constructor(payload) {
         this.path = payload?.path || [];

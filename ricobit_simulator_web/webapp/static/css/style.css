@@ -329,7 +329,7 @@ body {
 }
 
 .sidebar::-webkit-scrollbar {
-    width: 6px;
+    width: 0px;
 }
 
 .sidebar::-webkit-scrollbar-thumb {
@@ -359,7 +359,7 @@ body {
 .sidebar__title .tagline {
     margin: 4px 0 0;
     color: #475569;
-    font-size: 0.78rem;
+    font-size: 0.58rem;
     letter-spacing: 0.04em;
     text-transform: uppercase;
 }
@@ -367,18 +367,20 @@ body {
 .sidebar__section {
     display: flex;
     flex-direction: column;
-    gap: 14px;
-    padding: 16px;
+    gap: 12px;
+    padding: 12px;
     background: rgba(255, 255, 255, 0.85);
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: small;
     border-radius: 18px;
     border: 1px solid rgba(148, 163, 184, 0.22);
     box-shadow: 0 12px 32px -28px rgba(15, 23, 42, 0.5);
-    overflow: hidden;
+    overflow: visible;
 }
 
 .sidebar__section h2 {
     margin: 0;
-    font-size: 0.95rem;
+    font-size: 0.85rem;
     color: #0f172a;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -450,11 +452,11 @@ body {
 
 .form-control input[type="number"],
 .form-control select {
-    padding: 8px 10px;
+    padding: 6px 6px;
     border-radius: 8px;
     border: 1px solid rgba(15, 23, 42, 0.12);
     background: #ffffff;
-    font-size: 0.95rem;
+    font-size: 0.75rem;
 }
 
 .input-with-action {
@@ -527,6 +529,7 @@ body {
     justify-content: center;
     padding: 9px 14px;
     border-radius: 8px;
+    font-family: 'Space Grotesk', sans-serif;
     border: none;
     font-weight: 600;
     font-size: 0.6rem;
@@ -573,9 +576,10 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    margin-top: 8px;
-    padding: 10px 14px;
+    gap: 10px;
+    margin-top: 6px;
+    padding: 8px 12px;
+    width: 100%;
     border: 1px solid rgba(148, 163, 184, 0.35);
     border-radius: 14px;
     background: rgba(248, 250, 255, 0.9);
@@ -632,11 +636,12 @@ body {
     flex-direction: column;
     align-items: flex-start;
     gap: 2px;
-    font-weight: 600;
+    font-weight: 300;
+    font-family: 'Space Grotesk', sans-serif;
 }
 
 .control-toggle__label small {
-    font-weight: 500;
+    font-weight:3500;
     font-size: 0.7rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
@@ -653,12 +658,11 @@ body {
 
 .flow-log {
     max-height: clamp(240px, 30vh, 320px);
-    padding: 12px;
     border-radius: 10px;
     border: 1px solid rgba(15, 23, 42, 0.08);
     background: #f8fafc;
     overflow-y: auto;
-    font-size: 0.85rem;
+    font-size: 0.65rem;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -670,12 +674,14 @@ body {
     border-radius: 8px;
     padding: 8px 12px;
     box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+    font-family:'Space Grotesk', sans-serif;
 }
 
 .flow-entry__title {
-    font-weight: 600;
+    font-weight: 400;
     margin: 0;
     color: #1e3a8a;
+    font-family: 'Space Grotesk', sans-serif;
 }
 
 .flow-entry__phase {
@@ -683,16 +689,20 @@ body {
     text-transform: uppercase;
     color: #64748b;
     letter-spacing: 0.08em;
+    font-size: small;
 }
 
 .flow-entry__details {
-    margin: 6px 0 0;
-    color: #334155;
-    padding-left: 16px;
+    margin: 3px 0 0;
+    color: #5a6068;
+    padding-left: 5px;
+    font-size: small;
+    
+
 }
 
 .flow-entry--active {
-    border-color: #38bdf8;
+    border-color: #03a803;
     box-shadow: 0 8px 24px rgba(56, 189, 248, 0.25);
 }
 
