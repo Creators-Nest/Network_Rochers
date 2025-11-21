@@ -96,12 +96,12 @@ body {
     flex-direction: column;
     align-items: center;
     gap: 6px;
-    padding: 8px 6px;
-    border-radius: 10px;
+    padding: 6px 6px;
+    border-radius: 16px;
     background: rgba(148, 163, 184, 0.12);
     border: 1px solid transparent;
     transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
-    font-size: 0.65rem;
+    font-size: 0.45rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: #64748b;
@@ -236,7 +236,7 @@ body {
 
 .hop-row__text {
     margin: 0;
-    font-size: 0.65rem;
+    font-size: 0.55rem;
     color: #1e293b;
     white-space: normal;
     overflow: hidden;
@@ -269,16 +269,16 @@ body {
 /* ===== STATUS TEXT ===== */
 .status-label {
     margin: 0;
-    font-size: 0.65rem;
+    font-size: 0.55rem;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: #64748b;
-    font-weight: 600;
+    font-weight: 300;
 }
 
 .status-value {
     margin: 0;
-    font-size: 0.7rem;
+    font-size: 0.55rem;
     color: #0f172a;
     white-space: nowrap;
     overflow: hidden;
@@ -287,7 +287,7 @@ body {
 
 .status-sub {
     margin: 0;
-    font-size: 0.65rem;
+    font-size: 0.55rem;
     color: #475569;
     white-space: nowrap;
     overflow: hidden;
@@ -453,7 +453,7 @@ body {
 .form-control input[type="number"],
 .form-control select {
     padding: 6px 6px;
-    border-radius: 8px;
+    border-radius: 16px;
     border: 1px solid rgba(15, 23, 42, 0.12);
     background: #ffffff;
     font-size: 0.75rem;
@@ -473,7 +473,7 @@ body {
     border: 1px solid rgba(37, 99, 235, 0.28);
     background: rgba(225, 239, 255, 0.9);
     color: #1d4ed8;
-    border-radius: 8px;
+    border-radius: 16px;
     padding: 7px 12px;
     font-size: 0.75rem;
     font-weight: 600;
@@ -528,7 +528,7 @@ body {
     align-items: center;
     justify-content: center;
     padding: 9px 14px;
-    border-radius: 8px;
+    border-radius: 16px;
     font-family: 'Space Grotesk', sans-serif;
     border: none;
     font-weight: 600;
@@ -542,7 +542,7 @@ body {
 }
 
 .primary-btn {
-    background: linear-gradient(135deg, #2563eb, #38bdf8);
+    background: linear-gradient(135deg, #000000 0%, #00D4FF 100%);
     color: #ffffff;
     box-shadow: 0 10px 24px rgba(37, 99, 235, 0.35);
 }
@@ -580,24 +580,24 @@ body {
     margin-top: 6px;
     padding: 8px 12px;
     width: 100%;
-    border: 1px solid rgba(148, 163, 184, 0.35);
-    border-radius: 14px;
-    background: rgba(248, 250, 255, 0.9);
-    color: #0f172a;
+    border: 1px solid rgba(148, 163, 184, 0);
+    border-radius: 35px;
+    background: linear-gradient(135deg, #000000 0%, #00D4FF 100%);
+    color: #fcfdff;
     font-size: 0.85rem;
     cursor: pointer;
     transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
 }
 
 .control-toggle:hover {
-    border-color: rgba(59, 130, 246, 0.45);
+    border-color: rgba(59, 131, 246, 0);
     box-shadow: 0 8px 22px -18px rgba(59, 130, 246, 0.6);
 }
 
 .control-toggle.is-active {
-    border-color: rgba(59, 130, 246, 0.65);
-    background: rgba(219, 234, 254, 0.6);
-    box-shadow: 0 12px 32px -24px rgba(37, 99, 235, 0.55);
+    border-color: rgba(59, 131, 246, 0);
+    box-shadow: 0 12px 32px -24px rgba(37, 100, 235, 0.48);
+    color: linear-gradient(135deg, #000000 0%, #00D4FF 100%);
 }
 
 .control-toggle__indicator {
@@ -611,7 +611,7 @@ body {
 }
 
 .control-toggle.is-active .control-toggle__indicator {
-    background: linear-gradient(90deg, #2563eb, #38bdf8);
+    background: linear-gradient(90deg, #25c3eb, #38bdf8);
 }
 
 .control-toggle__indicator::after {
@@ -624,6 +624,7 @@ body {
     border-radius: 50%;
     background: #ffffff;
     box-shadow: 0 2px 6px rgba(15, 23, 42, 0.25);
+    color:linear-gradient(135deg, #000000 0%, #00D4FF 100%);
     transition: transform 0.2s ease;
 }
 
