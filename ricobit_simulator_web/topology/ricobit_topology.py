@@ -26,11 +26,15 @@ class RiCoBiT_Topology:
     def _generate_nodes(self):
         """Creates nodes based on 2^R formula."""
         for R in range(self.num_levels):
+            if R == 0:
+                # RiCoBiT papers exclude the central controller (0, 0)
+                continue
+
             num_nodes_in_ring = 2**R
             for Nr in range(num_nodes_in_ring):
                 address = (R, Nr)
                 self.nodes[address] = Node(address)
-        print(f"Generated {len(self.nodes)} total nodes.")
+        print(f"Generated {len(self.nodes)} total nodes (excluding (0, 0)).")
 
     def _connect_nodes(self):
         """Connects nodes (Ring + Tree connections)."""
@@ -38,17 +42,23 @@ class RiCoBiT_Topology:
             num_nodes_in_ring = 2**R
             for Nr in range(num_nodes_in_ring):
                 current_addr = (R, Nr)
-                current_node = self.nodes[current_addr]
+                current_node = self.nodes.get(current_addr)
+                if current_node is None:
+                    # Skip non-existent addresses (e.g., the removed (0, 0))
+                    continue
                 
                 # Ring connections (within same level)
                 if num_nodes_in_ring > 1:
                     left_neighbor_addr = (R, (Nr - 1) % num_nodes_in_ring)
                     right_neighbor_addr = (R, (Nr + 1) % num_nodes_in_ring)
                     
-                    if left_neighbor_addr not in current_node.interfaces:
-                        current_node.add_connection(self.nodes[left_neighbor_addr])
-                    if right_neighbor_addr not in current_node.interfaces:
-                        current_node.add_connection(self.nodes[right_neighbor_addr])
+                    left_neighbor = self.nodes.get(left_neighbor_addr)
+                    right_neighbor = self.nodes.get(right_neighbor_addr)
+
+                    if left_neighbor and left_neighbor_addr not in current_node.interfaces:
+                        current_node.add_connection(left_neighbor)
+                    if right_neighbor and right_neighbor_addr not in current_node.interfaces:
+                        current_node.add_connection(right_neighbor)
                 
                 # Tree connections (to upper level)
                 if R < self.num_levels - 1:
@@ -59,10 +69,13 @@ class RiCoBiT_Topology:
                     upper_addr_1 = (upper_R, upper_Nr_1)
                     upper_addr_2 = (upper_R, upper_Nr_2)
                     
-                    if upper_addr_1 not in current_node.interfaces:
-                        current_node.add_connection(self.nodes[upper_addr_1])
-                    if upper_addr_2 not in current_node.interfaces:
-                        current_node.add_connection(self.nodes[upper_addr_2])
+                    upper_neighbor_1 = self.nodes.get(upper_addr_1)
+                    upper_neighbor_2 = self.nodes.get(upper_addr_2)
+
+                    if upper_neighbor_1 and upper_addr_1 not in current_node.interfaces:
+                        current_node.add_connection(upper_neighbor_1)
+                    if upper_neighbor_2 and upper_addr_2 not in current_node.interfaces:
+                        current_node.add_connection(upper_neighbor_2)
         
         print("Finished connecting nodes.")
         

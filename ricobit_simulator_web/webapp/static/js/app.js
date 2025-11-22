@@ -11,12 +11,21 @@ const speedControl = document.getElementById('speedControl');
 const summary = document.getElementById('routeSummary');
 const pickSourceBtn = document.getElementById('pickSourceBtn');
 const pickDestinationBtn = document.getElementById('pickDestinationBtn');
+const destinationCandidateSelect = document.getElementById('destinationCandidateSelect');
+const addMultiDestinationBtn = document.getElementById('addMultiDestinationBtn');
+const pickDestinationMultiBtn = document.getElementById('pickDestinationMultiBtn');
 
 const applyTopologyBtn = document.getElementById('applyTopologyBtn');
 const levelInput = document.getElementById('levelInput');
 const simulateBtn = document.getElementById('simulateBtn');
 const animateBtn = document.getElementById('animateBtn');
 const resetBtn = document.getElementById('resetBtn');
+const simulationModeSelect = document.getElementById('simulationMode');
+const clearMultiDestinationsBtn = document.getElementById('clearMultiDestinationsBtn');
+const multiDestinationList = document.getElementById('multiDestinationList');
+const multiRouteList = document.getElementById('multiRouteList');
+const singleDestinationField = document.querySelector('[data-mode-area="single"]');
+const multiDestinationField = document.querySelector('[data-mode-area="multi"]');
 
 const zoomInBtn = document.getElementById('zoomInBtn');
 const zoomOutBtn = document.getElementById('zoomOutBtn');
@@ -62,10 +71,10 @@ const signalChips = {
 
 const colors = {
     tree: 'rgba(104, 104, 103, 0.23)',
-    treeHighlight: 'rgba(0, 0, 0, 0.88)',
+    treeHighlight: 'rgba(0, 0, 0, 1)',
     ringHighlight: 'rgba(0, 0, 0, 0.88)',
-    previewTree: 'rgba(0, 0, 0, 0.88)',
-    previewRing: 'rgba(0, 0, 0, 0.88)',
+    previewTree: 'rgba(255, 145, 0, 1)',
+    previewRing: 'rgba(255, 145, 0, 1)',
     node: '#0148c2e5',
     nodeHighlight: '#000000ff',
     nodeSelected: '#f97316',
@@ -77,7 +86,38 @@ const colors = {
     phaseData: '#22c55e',
     phaseRelease: '#0ea5e9',
     text: '#454545ae',
+    completedTree: '#16a34a',
+    completedRing: '#16a34a',
 };
+
+const PREVIEW_STYLE_DEFAULTS = {
+    active: {
+        treeColor: colors.treeHighlight,
+        ringColor: colors.ringHighlight,
+        lineWidth: 4,
+        strokeOpacity: 0.9,
+    },
+    pending: {
+        treeColor: colors.previewTree,
+        ringColor: colors.previewRing,
+        lineWidth: 3,
+        strokeOpacity: 0.45,
+    },
+    completed: {
+        treeColor: colors.completedTree,
+        ringColor: colors.completedRing,
+        lineWidth: 4,
+        strokeOpacity: 0.9,
+    },
+    default: {
+        treeColor: colors.previewTree,
+        ringColor: colors.previewRing,
+        lineWidth: 3,
+        strokeOpacity: 0.75,
+    },
+};
+
+const PARALLEL_ROUTE_COLORS = ['#ff6a00ff', '#00aeffff', '#8400ffff', '#f60303ff', '#05faddff'];
 
 const STAGE_INDICATOR_COLORS = {
     ready: colors.nodeSelected,
@@ -121,9 +161,17 @@ let nodePanelAutoTracking = false;
 let autoNodeDetailsPreference = false;
 let routePreview = null;
 let lastRoutePayload = null;
+let multiRunState = null;
+const multiDestinations = [];
+let animationOptions = null;
 let pickMode = null;
 let currentSourceId = null;
 let currentDestinationId = null;
+
+if (animateBtn) {
+    animateBtn.dataset.defaultLabel = animateBtn.textContent;
+    animateBtn.dataset.currentLabel = animateBtn.textContent;
+}
 
 const PHASE_SEQUENCE = ['ready', 'req', 'ack', 'data', 'release'];
 
@@ -179,6 +227,14 @@ function resetAllNodeRuntimeState() {
     });
 }
 
+function resetMultiRunState({ clearList = true } = {}) {
+    multiRunState = null;
+    if (multiRouteList && clearList) {
+        multiRouteList.innerHTML = '';
+        multiRouteList.style.display = 'none';
+    }
+}
+
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
 }
@@ -208,13 +264,20 @@ function setPickMode(mode) {
         pickDestinationBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
         pickDestinationBtn.classList.toggle('is-active', active);
     }
+    if (pickDestinationMultiBtn) {
+        const active = normalized === 'destination';
+        pickDestinationMultiBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        pickDestinationMultiBtn.classList.toggle('is-active', active);
+    }
     if (canvas) {
         canvas.classList.toggle('is-picking', Boolean(normalized));
     }
     if (normalized && hudStatus) {
         hudStatus.textContent = normalized === 'source'
             ? 'Click a node to choose the source.'
-            : 'Click a node to choose the destination.';
+            : isMultiSimulationMode()
+                ? 'Click a node to set the destination candidate.'
+                : 'Click a node to choose the destination.';
     }
 }
 
@@ -230,6 +293,120 @@ function setSelectValue(select, nodeId) {
         select.value = nodeId;
     }
     return true;
+}
+
+function setElementVisibility(element, visible) {
+    if (!element) return;
+    element.style.display = visible ? '' : 'none';
+}
+
+function getSimulationMode() {
+    return simulationModeSelect ? simulationModeSelect.value : 'single';
+}
+
+function isMultiSimulationMode() {
+    const mode = getSimulationMode();
+    return mode === 'sequence' || mode === 'parallel';
+}
+
+function renderMultiDestinationList() {
+    if (!multiDestinationList) return;
+    multiDestinationList.innerHTML = '';
+
+    if (!multiDestinations.length) {
+        const emptyMessage = document.createElement('p');
+        emptyMessage.className = 'destination-list__empty';
+        emptyMessage.textContent = 'No destinations added yet.';
+        multiDestinationList.appendChild(emptyMessage);
+        if (topologyData && isMultiSimulationMode()) {
+            renderTopology();
+        }
+        return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    multiDestinations.forEach((nodeId) => {
+        const meta = nodeMeta.get(nodeId) || parseSelectValue(nodeId);
+        const labelText = safeNodeLabel(meta);
+        const item = document.createElement('div');
+        item.className = 'destination-pill';
+        item.setAttribute('role', 'listitem');
+
+        const name = document.createElement('span');
+        name.textContent = labelText;
+        item.appendChild(name);
+
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'mini-btn destination-pill__remove';
+        removeBtn.textContent = 'x';
+        removeBtn.setAttribute('data-remove-destination', nodeId);
+        removeBtn.setAttribute('aria-label', `Remove ${labelText} from destinations`);
+        removeBtn.setAttribute('title', `Remove ${labelText}`);
+        item.appendChild(removeBtn);
+
+        fragment.appendChild(item);
+    });
+
+    multiDestinationList.appendChild(fragment);
+    if (topologyData && isMultiSimulationMode()) {
+        renderTopology();
+    }
+}
+
+function addMultiDestination(nodeId, { announce = true } = {}) {
+    if (!nodeId) {
+        return false;
+    }
+    const sourceId = sourceSelect ? sourceSelect.value : null;
+    if (nodeId === sourceId) {
+        if (announce && hudStatus) {
+            hudStatus.textContent = 'Destination cannot match the source node.';
+        }
+        return false;
+    }
+    if (multiDestinations.includes(nodeId)) {
+        if (announce && hudStatus) {
+            hudStatus.textContent = 'Destination already on the list.';
+        }
+        return false;
+    }
+    multiDestinations.push(nodeId);
+    renderMultiDestinationList();
+    if (announce && hudStatus) {
+        const meta = nodeMeta.get(nodeId) || parseSelectValue(nodeId);
+        hudStatus.textContent = `Added destination ${safeNodeLabel(meta)}.`;
+    }
+    return true;
+}
+
+function removeMultiDestination(nodeId, { announce = true } = {}) {
+    const index = multiDestinations.indexOf(nodeId);
+    if (index === -1) {
+        return false;
+    }
+    const meta = nodeMeta.get(nodeId) || parseSelectValue(nodeId);
+    multiDestinations.splice(index, 1);
+    renderMultiDestinationList();
+    if (announce && hudStatus) {
+        hudStatus.textContent = `Removed ${safeNodeLabel(meta)} from destinations.`;
+    }
+    return true;
+}
+
+function clearMultiDestinationList({ announce = true } = {}) {
+    if (!multiDestinations.length) {
+        if (announce && hudStatus) {
+            hudStatus.textContent = 'Destination list is already empty.';
+        }
+        renderMultiDestinationList();
+        return;
+    }
+    multiDestinations.length = 0;
+    renderMultiDestinationList();
+    if (announce && hudStatus) {
+        hudStatus.textContent = 'Destination list cleared.';
+    }
 }
 
 function syncAutoNodeDetailsControl() {
@@ -479,7 +656,7 @@ function updateNodePanelContent() {
     if (!meta) return;
 
     nodePanelTitle.textContent = `(${meta.ring}, ${meta.index})`;
-    nodePanelSubhead.textContent = meta.ring === 0 ? 'Root controller node' : `Ring ${meta.ring} core`;
+    nodePanelSubhead.textContent = `Ring ${meta.ring} core`;
     nodePanelRing.textContent = `${meta.ring}`;
     nodePanelDegree.textContent = `${meta.degree ?? 0}`;
     const routingCount = Array.isArray(meta.routingTable) ? meta.routingTable.length : 0;
@@ -585,10 +762,30 @@ function handleCanvasNodeClick(nodeId) {
     }
     if (pickMode === 'destination') {
         const meta = nodeMeta.get(nodeId) || parseSelectValue(nodeId);
-        if (setSelectValue(destinationSelect, nodeId)) {
+        const labelText = safeNodeLabel(meta);
+        const mode = getSimulationMode();
+        if (mode === 'sequence' || mode === 'parallel') {
+            let applied = false;
+            if (destinationCandidateSelect) {
+                applied = setSelectValue(destinationCandidateSelect, nodeId);
+            }
+            if (!applied && destinationSelect) {
+                applied = setSelectValue(destinationSelect, nodeId);
+            }
+            if (hudStatus) {
+                hudStatus.textContent = applied
+                    ? `Candidate destination set to ${labelText}. Press + to add to the list.`
+                    : `Candidate destination ${labelText} ready.`;
+            }
+            focusNode(nodeId, {
+                auto: nodePanelAutoTracking,
+                openPanelOnFocus: true,
+            });
+            renderTopology();
+        } else if (setSelectValue(destinationSelect, nodeId)) {
             handleDestinationSelectChange({
                 announce: true,
-                message: `Destination set to ${nodeLabel(meta)} via canvas.`,
+                message: `Destination set to ${labelText} via canvas.`,
             });
         } else {
             selectNode(nodeId);
@@ -678,6 +875,217 @@ function nodeLabel({ ring, index }) {
     return `(${ring}, ${index})`;
 }
 
+function safeNodeLabel(node) {
+    if (!node || typeof node.ring !== 'number' || typeof node.index !== 'number') {
+        return '(?, ?)';
+    }
+    return nodeLabel(node);
+}
+
+function routePathSignature(path) {
+    if (!Array.isArray(path) || !path.length) {
+        return null;
+    }
+    return path
+        .map((node) => (node && typeof node.ring === 'number' && typeof node.index === 'number'
+            ? `${node.ring}-${node.index}`
+            : '∅'))
+        .join('|');
+}
+
+function renderMultiRouteList() {
+    if (!multiRouteList) return;
+    if (!multiRunState || !Array.isArray(multiRunState.payloads) || !multiRunState.payloads.length) {
+        multiRouteList.innerHTML = '';
+        multiRouteList.style.display = 'none';
+        return;
+    }
+
+    multiRouteList.innerHTML = '';
+    multiRouteList.style.display = '';
+
+    const title = document.createElement('p');
+    title.className = 'flow-entry__phase';
+    title.textContent = multiRunState.mode === 'sequence'
+        ? 'Sequence queue'
+        : 'Parallel routes';
+    multiRouteList.appendChild(title);
+
+    const fragment = document.createDocumentFragment();
+    const completedSet = multiRunState.completed || new Set();
+    const activeIndex = multiRunState.mode === 'sequence'
+        ? (typeof multiRunState.currentIndex === 'number'
+            ? multiRunState.currentIndex
+            : multiRunState.selectedIndex)
+        : multiRunState.selectedIndex;
+
+    multiRunState.payloads.forEach((payload, index) => {
+        const card = document.createElement('article');
+        card.className = 'flow-entry multi-route-entry';
+        card.dataset.routeIndex = `${index}`;
+
+        const isCompleted = completedSet.has(index);
+        const isActive = typeof activeIndex === 'number' && activeIndex === index;
+
+        if (isActive) {
+            card.classList.add('flow-entry--active');
+        }
+        if (isCompleted) {
+            card.style.opacity = '0.65';
+        }
+
+        if (multiRunState.mode === 'parallel') {
+            card.setAttribute('role', 'button');
+            card.tabIndex = 0;
+            card.style.cursor = 'pointer';
+        }
+
+        const status = document.createElement('p');
+        status.className = 'flow-entry__phase';
+        if (isCompleted) {
+            status.textContent = 'Completed';
+        } else if (multiRunState.mode === 'sequence' && isActive) {
+            status.textContent = 'In progress';
+        } else {
+            status.textContent = 'Pending';
+        }
+        card.appendChild(status);
+
+        const titleEl = document.createElement('h3');
+        titleEl.className = 'flow-entry__title';
+        const pathArray = Array.isArray(payload.path) ? payload.path : [];
+        const startNode = pathArray[0] || multiRunState.source || payload.source;
+        const endNode = pathArray[pathArray.length - 1] || payload.destination || startNode;
+        titleEl.textContent = `Route ${index + 1}: ${safeNodeLabel(startNode)} → ${safeNodeLabel(endNode)}`;
+        card.appendChild(titleEl);
+
+        const details = document.createElement('ul');
+        details.className = 'flow-entry__details';
+        const hopItem = document.createElement('li');
+        hopItem.textContent = `Hop count: ${payload.hopCount ?? 0}`;
+        details.appendChild(hopItem);
+
+        if (multiRunState.mode === 'parallel' && !isCompleted) {
+            const hintItem = document.createElement('li');
+            hintItem.textContent = 'Click to preview';
+            details.appendChild(hintItem);
+        }
+
+        if (multiRunState.mode === 'sequence' && isCompleted) {
+            const doneItem = document.createElement('li');
+            doneItem.textContent = 'Packet delivered';
+            details.appendChild(doneItem);
+        }
+
+        card.appendChild(details);
+        fragment.appendChild(card);
+    });
+
+    multiRouteList.appendChild(fragment);
+    multiRouteList.scrollTop = 0;
+
+}
+
+function handleMultiRouteListClick(event) {
+    const target = event.target.closest('.multi-route-entry');
+    if (!target || !multiRunState) return;
+    const index = parseInt(target.dataset.routeIndex, 10);
+    if (Number.isNaN(index)) return;
+    if (multiRunState.mode === 'parallel') {
+        focusParallelRoute(index);
+        return;
+    }
+    if (multiRunState.mode === 'sequence') {
+        if (typeof multiRunState.currentIndex === 'number') return;
+        if (animationState) return;
+        previewSequentialRoute(index);
+    }
+}
+
+function handleMultiRouteListKeydown(event) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const target = event.target.closest('.multi-route-entry');
+    if (!target || !multiRunState) return;
+    event.preventDefault();
+    const index = parseInt(target.dataset.routeIndex, 10);
+    if (Number.isNaN(index)) return;
+    if (multiRunState.mode === 'parallel') {
+        focusParallelRoute(index);
+        return;
+    }
+    if (multiRunState.mode === 'sequence') {
+        if (typeof multiRunState.currentIndex === 'number') return;
+        if (animationState) return;
+        previewSequentialRoute(index);
+    }
+}
+
+function focusParallelRoute(index) {
+    if (!multiRunState || multiRunState.mode !== 'parallel') return;
+    if (!Array.isArray(multiRunState.payloads) || index < 0 || index >= multiRunState.payloads.length) {
+        return;
+    }
+
+    multiRunState.selectedIndex = index;
+    renderMultiRouteList();
+    highlightMultiRouteCard(index);
+
+    const payload = multiRunState.payloads[index];
+    const previewEntry = Array.isArray(multiRunState.previewRoutes)
+        ? multiRunState.previewRoutes[index]
+        : null;
+    const previewColors = previewEntry
+        ? {
+            treeColor: previewEntry.treeColor,
+            ringColor: previewEntry.ringColor,
+            strokeOpacity: 0.9,
+            lineWidth: 4,
+        }
+        : null;
+    prepareRoute(payload, {
+        contextLabel: `Parallel route ${index + 1} of ${multiRunState.payloads.length}`,
+        contextHint: 'Preview loaded. Click "Animate all" to start simultaneous transfer.',
+        buttonLabel: 'Animate all',
+        previewColors,
+    });
+
+    lastRoutePayload = payload;
+    updateAnimateButton({
+        disabled: !payload?.segments?.length,
+        busy: false,
+        label: 'Animate all',
+    });
+}
+
+function previewSequentialRoute(index) {
+    if (!multiRunState || multiRunState.mode !== 'sequence') return;
+    if (animationState) return;
+    const { payloads } = multiRunState;
+    if (!Array.isArray(payloads) || !payloads.length) return;
+    if (index < 0 || index >= payloads.length) return;
+
+    multiRunState.selectedIndex = index;
+    renderMultiRouteList();
+    highlightMultiRouteCard(index);
+
+    const payload = payloads[index];
+    const isCompleted = multiRunState.completed instanceof Set && multiRunState.completed.has(index);
+    const hint = isCompleted
+        ? 'Route already delivered. Press "Animate sequence" to replay from start.'
+        : (payloads.length > 1
+            ? 'Routes ready. Press "Animate sequence" to begin sequential transfer.'
+            : 'Route ready. Press "Animate sequence" to begin.');
+
+    prepareRoute(payload, {
+        contextLabel: `Sequence route ${index + 1} of ${payloads.length}`,
+        contextHint: hint,
+        buttonLabel: 'Animate sequence',
+        previewStyle: isCompleted ? 'completed' : 'active',
+    });
+
+    lastRoutePayload = payload;
+}
+
 function formatRouteText(path) {
     if (!path || !path.length) {
         return 'Awaiting route computation';
@@ -729,7 +1137,7 @@ function updateStatusBar(status) {
         statusElements.routeValue.textContent = 'Awaiting route computation';
     }
 }
-function showRouteReadyStatus(payload) {
+function showRouteReadyStatus(payload, { transferText } = {}) {
     const hopCount = payload?.hopCount ?? 0;
     const startNode = Array.isArray(payload?.path) && payload.path.length ? payload.path[0] : null;
     const endNode = Array.isArray(payload?.path) && payload.path.length ? payload.path[payload.path.length - 1] : null;
@@ -741,7 +1149,7 @@ function showRouteReadyStatus(payload) {
         phaseLabel: 'Ready',
         signalText: 'Idle',
         signalStates: { req: 'sleep', ack: 'sleep', data: 'sleep' },
-        transferText: 'Press Animate',
+        transferText: transferText || 'Press Animate',
         progressPercent: 0,
         timer: 0,
     });
@@ -762,12 +1170,18 @@ function setRouteInfo(payload) {
     statusElements.routeValue.textContent = currentRouteInfo.routeText;
 }
 
-function updateAnimateButton({ disabled, busy = false } = {}) {
+function updateAnimateButton({ disabled, busy = false, label } = {}) {
     if (!animateBtn) return;
     if (typeof disabled === 'boolean') {
         animateBtn.disabled = disabled;
     }
-    animateBtn.textContent = busy ? 'Animating…' : 'Animate path';
+    if (label) {
+        animateBtn.dataset.currentLabel = label;
+    } else if (!animateBtn.dataset.currentLabel) {
+        animateBtn.dataset.currentLabel = animateBtn.dataset.defaultLabel || 'Animate path';
+    }
+    const currentLabel = animateBtn.dataset.currentLabel || animateBtn.dataset.defaultLabel || 'Animate path';
+    animateBtn.textContent = busy ? 'Animating…' : currentLabel;
 }
 
 function ingestTopologyPayload(data, { resetView = true } = {}) {
@@ -832,20 +1246,65 @@ function populateNodeSelects() {
         .sort((a, b) => a.value.localeCompare(b.value));
 
     [sourceSelect, destinationSelect].forEach((select, idx) => {
+        if (!select) return;
+
+        const previousValue = select.value;
         select.innerHTML = '';
+
         options.forEach((opt) => {
             const optionEl = document.createElement('option');
             optionEl.value = opt.value;
             optionEl.textContent = opt.label;
-            if (idx === 0 && opt.value === '0-0') {
-                optionEl.selected = true;
-            }
-            if (idx === 1 && opt.value === '2-2') {
-                optionEl.selected = true;
-            }
             select.appendChild(optionEl);
         });
+
+        const hasPrevious = options.some((opt) => opt.value === previousValue);
+        let fallbackValue = '';
+
+        if (idx === 0) {
+            fallbackValue = options.length ? options[0].value : '';
+        } else if (idx === 1) {
+            fallbackValue = options.length > 1 ? options[1].value : (options[0]?.value || '');
+        }
+
+        if (hasPrevious) {
+            select.value = previousValue;
+        } else if (fallbackValue) {
+            select.value = fallbackValue;
+        }
     });
+
+    if (destinationCandidateSelect) {
+        const previousValue = destinationCandidateSelect.value;
+        destinationCandidateSelect.innerHTML = '';
+        options.forEach((opt) => {
+            const optionEl = document.createElement('option');
+            optionEl.value = opt.value;
+            optionEl.textContent = opt.label;
+            destinationCandidateSelect.appendChild(optionEl);
+        });
+
+        if (options.length) {
+            let fallback = previousValue;
+            const hasPrevious = options.some((opt) => opt.value === fallback);
+            if (!hasPrevious) {
+                fallback = destinationSelect?.value || options[0].value;
+            }
+            destinationCandidateSelect.value = fallback;
+        }
+    }
+
+    const validValues = new Set(options.map((opt) => opt.value));
+    let removedAny = false;
+    for (let i = multiDestinations.length - 1; i >= 0; i -= 1) {
+        if (!validValues.has(multiDestinations[i])) {
+            multiDestinations.splice(i, 1);
+            removedAny = true;
+        }
+    }
+    if (removedAny || (multiDestinationList && !multiDestinationList.children.length)) {
+        renderMultiDestinationList();
+    }
 }
 
 function fetchTopology() {
@@ -897,6 +1356,9 @@ function drawTreeEdges(layout) {
 function drawNodes(layout) {
     if (!topologyData) return;
     ctx.save();
+    const mode = getSimulationMode();
+    const highlightMulti = mode === 'sequence' || mode === 'parallel';
+    const multiDestinationSet = highlightMulti ? new Set(multiDestinations) : null;
     topologyData.nodes.forEach((node) => {
         const nodeId = makeNodeId(node);
         const pos = getNodePosition(node.ring, node.index, layout);
@@ -905,7 +1367,9 @@ function drawNodes(layout) {
         nodePositions.set(nodeId, { x: pos.x, y: pos.y, radius });
         const isSelected = nodeId === selectedNodeId;
         const isSource = nodeId === currentSourceId;
-        const isDestination = nodeId === currentDestinationId;
+        const isDestination = highlightMulti
+            ? multiDestinationSet.has(nodeId)
+            : nodeId === currentDestinationId;
         let fillColor = colors.node;
         if (isSource && isDestination) {
             fillColor = colors.sharedNode;
@@ -1153,6 +1617,36 @@ function drawPhaseIndicators(segment, progress, layout) {
     }
 }
 
+function resolvePreviewDrawOptions(preview) {
+    if (!preview) return null;
+    const styleKey = preview.renderStyle && PREVIEW_STYLE_DEFAULTS[preview.renderStyle]
+        ? preview.renderStyle
+        : 'default';
+    const defaults = PREVIEW_STYLE_DEFAULTS[styleKey];
+    return {
+        treeColor: preview.treeColor || defaults.treeColor,
+        ringColor: preview.ringColor || defaults.ringColor,
+        lineWidth: typeof preview.lineWidth === 'number' ? preview.lineWidth : defaults.lineWidth,
+        strokeOpacity: typeof preview.strokeOpacity === 'number'
+            ? preview.strokeOpacity
+            : defaults.strokeOpacity,
+    };
+}
+
+function drawPreviewOverlay(preview, layout) {
+    if (!preview || !layout) return;
+    const drawOptions = resolvePreviewDrawOptions(preview);
+    if (!drawOptions) return;
+    drawRoute(preview, layout, {
+        showIndicator: false,
+        showPhaseIndicators: false,
+        treeColor: drawOptions.treeColor,
+        ringColor: drawOptions.ringColor,
+        lineWidth: drawOptions.lineWidth,
+        strokeOpacity: drawOptions.strokeOpacity,
+    });
+}
+
 function indicatorInfoForProgress(segment, progress, layout) {
     const stage = stageFromProgress(progress);
     const color = STAGE_INDICATOR_COLORS[stage.key] || colors.nodeHighlight;
@@ -1206,20 +1700,47 @@ function renderTopology() {
     ctx.clearRect(0, 0, canvas.width / canvasScale, canvas.height / canvasScale);
     drawRings(layoutCache);
     drawTreeEdges(layoutCache);
+    const completedOverlays = Array.isArray(multiRunState?.completedRoutes)
+        ? multiRunState.completedRoutes
+        : [];
+    completedOverlays.forEach((overlay) => {
+        drawPreviewOverlay(overlay, layoutCache);
+    });
+
+    const previewOverlays = Array.isArray(multiRunState?.previewRoutes)
+        ? multiRunState.previewRoutes
+        : [];
+    const activeSignature = routePathSignature(routePreview?.path);
+    previewOverlays.forEach((overlay) => {
+        if (!overlay) return;
+        const overlaySignature = routePathSignature(overlay.path);
+        if (activeSignature && overlaySignature && overlaySignature === activeSignature) {
+            return;
+        }
+        drawPreviewOverlay(overlay, layoutCache);
+    });
+
     if (routePreview) {
-        drawRoute(routePreview, layoutCache, {
-            showIndicator: false,
-            showPhaseIndicators: false,
-            treeColor: colors.previewTree,
-            ringColor: colors.previewRing,
-            lineWidth: 3,
-            strokeOpacity: 0.75,
-        });
+        drawPreviewOverlay(routePreview, layoutCache);
     }
     nodePositions.clear();
     drawNodes(layoutCache);
     if (animationState) {
-        drawRoute(animationState, layoutCache, { showIndicator: true, showPhaseIndicators: true });
+        if (animationState.mode === 'parallel' && Array.isArray(animationState.animations)) {
+            animationState.animations.forEach((animation, index) => {
+                const color = PARALLEL_ROUTE_COLORS[index % PARALLEL_ROUTE_COLORS.length];
+                drawRoute(animation, layoutCache, {
+                    showIndicator: true,
+                    showPhaseIndicators: index === 0,
+                    treeColor: color,
+                    ringColor: color,
+                    lineWidth: 3,
+                    strokeOpacity: 0.85,
+                });
+            });
+        } else {
+            drawRoute(animationState, layoutCache, { showIndicator: true, showPhaseIndicators: true });
+        }
     }
 }
 
@@ -1361,11 +1882,35 @@ class RouteAnimation {
         };
     }
 }
+
+class ParallelRouteController {
+    constructor(payloads, speed) {
+        this.mode = 'parallel';
+        this.payloads = payloads;
+        this.animations = payloads.map((payload) => new RouteAnimation(payload, speed));
+    }
+
+    update(timestamp) {
+        this.animations.forEach((animation) => {
+            animation.update(timestamp);
+        });
+    }
+
+    isComplete() {
+        return this.animations.every((animation) => animation.isComplete());
+    }
+}
+
 class RoutePreview {
-    constructor(payload) {
+    constructor(payload, options = {}) {
         this.path = payload?.path || [];
         this.segments = payload?.segments || [];
         this.flow = payload?.flow || [];
+        this.renderStyle = options.renderStyle || 'default';
+        this.treeColor = options.treeColor || null;
+        this.ringColor = options.ringColor || null;
+        this.lineWidth = typeof options.lineWidth === 'number' ? options.lineWidth : null;
+        this.strokeOpacity = typeof options.strokeOpacity === 'number' ? options.strokeOpacity : null;
     }
 
     segmentProgress() {
@@ -1427,13 +1972,66 @@ function stageFromProgress(progress) {
     };
 }
 
-function updateNodeRuntimeFromStatus(status) {
-    if (!status) return;
-    if (!animationState) return;
+function aggregateParallelStatuses(statuses, { timerOverride } = {}) {
+    if (!Array.isArray(statuses) || !statuses.length) {
+        return {
+            hopText: '0 / 0',
+            nodesText: 'No active routes',
+            phaseKey: 'ready',
+            phaseLabel: 'Parallel',
+            signalText: 'Idle',
+            signalStates: { req: 'sleep', ack: 'sleep', data: 'sleep' },
+            transferText: '',
+            progressPercent: 0,
+            timer: 0,
+        };
+    }
 
-    const finalNode = Array.isArray(animationState.path) && animationState.path.length
-        ? animationState.path[animationState.path.length - 1]
-        : null;
+    const total = statuses.length;
+    let completed = 0;
+    let progressSum = 0;
+    let maxTimer = 0;
+
+    statuses.forEach((status) => {
+        if (!status) return;
+        const isCompleted = status.phaseKey === 'completed' || status.phaseLabel === 'Completed';
+        if (isCompleted) {
+            completed += 1;
+        }
+        progressSum += Number(status.progressPercent ?? 0);
+        maxTimer = Math.max(maxTimer, Number(status.timer ?? 0));
+    });
+
+    const progressPercent = Math.round(progressSum / total);
+    const allComplete = completed === total;
+    const timer = typeof timerOverride === 'number' ? timerOverride : Math.round(maxTimer);
+    return {
+        hopText: `${completed} / ${total}`,
+        nodesText: allComplete
+            ? 'All packets delivered'
+            : `${total - completed} packet(s) still in flight`,
+        phaseKey: allComplete ? 'completed' : 'data',
+        phaseLabel: allComplete ? 'Completed' : 'Parallel',
+        signalText: allComplete ? 'Idle' : 'Parallel active',
+        signalStates: allComplete
+            ? { req: 'sleep', ack: 'sleep', data: 'sleep' }
+            : { req: 'active', ack: 'active', data: 'active' },
+        transferText: allComplete ? 'Transfers complete' : 'Multiple packets transferring',
+        progressPercent,
+        timer,
+    };
+}
+
+function updateNodeRuntimeFromStatus(status, animationContext = animationState) {
+    if (!status) return;
+    if (!animationContext) return;
+
+    let finalNode = null;
+    if (Array.isArray(animationContext.path) && animationContext.path.length) {
+        finalNode = animationContext.path[animationContext.path.length - 1];
+    } else if (Array.isArray(animationContext.segments) && animationContext.segments.length) {
+        finalNode = animationContext.segments[animationContext.segments.length - 1]?.to || null;
+    }
 
     if (!status.segment) {
         const isCompletedPhase = status.phaseKey === 'completed' || status.phaseLabel === 'Completed';
@@ -1529,6 +2127,18 @@ function highlightFlowCard(index) {
     });
 }
 
+function highlightMultiRouteCard(index) {
+    if (!multiRouteList) return;
+    const cards = multiRouteList.querySelectorAll('.multi-route-entry');
+    cards.forEach((card, idx) => {
+        if (idx === index) {
+            card.classList.add('flow-entry--active');
+        } else {
+            card.classList.remove('flow-entry--active');
+        }
+    });
+}
+
 function renderFlow(flowEntries) {
     flowLog.innerHTML = '';
     flowCardElements = [];
@@ -1574,6 +2184,12 @@ function parseSelectValue(value) {
     };
 }
 
+function collectSelectedDestinations() {
+    return multiDestinations
+        .map((nodeId) => parseSelectValue(nodeId))
+        .filter((node) => Number.isFinite(node.ring) && Number.isFinite(node.index));
+}
+
 function handleSourceSelectChange({ announce = false, message } = {}) {
     syncSelectionState();
     const nodeId = currentSourceId;
@@ -1604,68 +2220,369 @@ function handleDestinationSelectChange({ announce = false, message } = {}) {
     renderTopology();
 }
 
-function simulateRoute() {
-    if (!topologyData) return;
-    setPickMode(null);
-    syncSelectionState();
-    if (isMobileSidebar() && isSidebarVisible()) {
-        closeSidebar();
-    }
-    stopAnimation();
-    updateAnimateButton({ disabled: true, busy: false });
-    const source = parseSelectValue(sourceSelect.value);
-    const destination = parseSelectValue(destinationSelect.value);
-    hudStatus.textContent = `Preparing route ${nodeLabel(source)} → ${nodeLabel(destination)}…`;
-
-    fetch('/api/route', {
+async function fetchRoutePayload(source, destination) {
+    const response = await fetch('/api/route', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             source: { ring: source.ring, node: source.index },
             destination: { ring: destination.ring, node: destination.index },
         }),
-    })
-        .then((res) => res.json())
-        .then((payload) => {
-            if (payload.error) {
-                hudStatus.textContent = payload.error;
-                routePreview = null;
-                lastRoutePayload = null;
-                renderTopology();
-                setStatusIdle(payload.error);
-                updateAnimateButton({ disabled: true, busy: false });
-                return;
-            }
-            prepareRoute(payload);
-        })
-        .catch((err) => {
-            console.error(err);
-            hudStatus.textContent = 'Routing failed';
-            setStatusIdle('Routing failed');
-            routePreview = null;
-            lastRoutePayload = null;
-            renderTopology();
-            updateAnimateButton({ disabled: true, busy: false });
-        });
+    });
+
+    const data = await response.json();
+    if (!response.ok || data.error) {
+        throw new Error(data.error || 'Routing failed');
+    }
+    return {
+        ...data,
+        source,
+        destination,
+    };
 }
 
-function prepareRoute(payload) {
+async function simulateSingleRoute() {
+    if (!topologyData) return;
+    setPickMode(null);
+    resetMultiRunState();
+    syncSelectionState();
+    if (isMobileSidebar() && isSidebarVisible()) {
+        closeSidebar();
+    }
+    stopAnimation();
+    resetAllNodeRuntimeState();
+    updateAnimateButton({ disabled: true, busy: false, label: animateBtn.dataset.defaultLabel });
+    const source = parseSelectValue(sourceSelect.value);
+    const destination = parseSelectValue(destinationSelect.value);
+    hudStatus.textContent = `Preparing route ${nodeLabel(source)} → ${nodeLabel(destination)}…`;
+
+    try {
+        const payload = await fetchRoutePayload(source, destination);
+        prepareRoute(payload);
+        hudStatus.textContent = 'Route ready. Click "Animate path" to begin.';
+    } catch (error) {
+        console.error(error);
+        const message = error.message || 'Routing failed';
+        hudStatus.textContent = message;
+        setStatusIdle(message);
+        routePreview = null;
+        lastRoutePayload = null;
+        renderTopology();
+        updateAnimateButton({ disabled: true, busy: false, label: animateBtn.dataset.defaultLabel });
+    }
+}
+
+async function simulateSequentialRoutes() {
+    if (!topologyData) return;
+    setPickMode(null);
+    stopAnimation();
+    resetAllNodeRuntimeState();
+    resetMultiRunState();
+    syncSelectionState();
+    if (isMobileSidebar() && isSidebarVisible()) {
+        closeSidebar();
+    }
+
+    const source = parseSelectValue(sourceSelect.value);
+    const destinations = collectSelectedDestinations();
+    const sourceKey = `${source.ring}-${source.index}`;
+    const dedupe = new Map();
+    destinations.forEach((dest) => {
+        if (!dest || typeof dest.ring !== 'number' || typeof dest.index !== 'number') {
+            return;
+        }
+        const key = `${dest.ring}-${dest.index}`;
+        if (key === sourceKey) {
+            return;
+        }
+        if (!dedupe.has(key)) {
+            dedupe.set(key, dest);
+        }
+    });
+
+    const uniqueDestinations = Array.from(dedupe.values());
+    if (!uniqueDestinations.length) {
+        hudStatus.textContent = 'Add one or more destination nodes for 1 → n sequence.';
+        setStatusIdle('Awaiting destination selection');
+        updateAnimateButton({ disabled: true, busy: false, label: animateBtn.dataset.defaultLabel });
+        return;
+    }
+
+    hudStatus.textContent = `Computing ${uniqueDestinations.length} sequential route(s)…`;
+
+    const payloads = [];
+    for (let i = 0; i < uniqueDestinations.length; i += 1) {
+        const destination = uniqueDestinations[i];
+        try {
+            hudStatus.textContent = `Routing ${i + 1} / ${uniqueDestinations.length}…`;
+            const payload = await fetchRoutePayload(source, destination);
+            payloads.push(payload);
+        } catch (error) {
+            console.error(error);
+            const message = error.message || 'Routing failed';
+            hudStatus.textContent = message;
+            setStatusIdle(message);
+            updateAnimateButton({ disabled: true, busy: false, label: animateBtn.dataset.defaultLabel });
+            resetMultiRunState();
+            return;
+        }
+    }
+
+    if (!payloads.length) {
+        hudStatus.textContent = 'No valid routes generated.';
+        setStatusIdle('Awaiting destination selection');
+        updateAnimateButton({ disabled: true, busy: false, label: animateBtn.dataset.defaultLabel });
+        return;
+    }
+
+    multiRunState = {
+        mode: 'sequence',
+        payloads,
+        currentIndex: null,
+        selectedIndex: 0,
+        completed: new Set(),
+        completedRoutes: [],
+        previewRoutes: payloads.map((payload) => new RoutePreview(payload, {
+            renderStyle: 'pending',
+            strokeOpacity: 0.45,
+        })),
+        source,
+    };
+
+    summary.textContent = `Sequence routes: ${payloads.length} destination(s)`;
+    renderMultiRouteList();
+    previewSequentialRoute(0);
+}
+
+async function simulateParallelRoutes() {
+    if (!topologyData) return;
+    setPickMode(null);
+    stopAnimation();
+    resetAllNodeRuntimeState();
+    resetMultiRunState();
+    syncSelectionState();
+    if (isMobileSidebar() && isSidebarVisible()) {
+        closeSidebar();
+    }
+
+    const source = parseSelectValue(sourceSelect.value);
+    const destinations = collectSelectedDestinations();
+    const sourceKey = `${source.ring}-${source.index}`;
+    const dedupe = new Map();
+    destinations.forEach((dest) => {
+        if (!dest || typeof dest.ring !== 'number' || typeof dest.index !== 'number') {
+            return;
+        }
+        const key = `${dest.ring}-${dest.index}`;
+        if (key === sourceKey) {
+            return;
+        }
+        if (!dedupe.has(key)) {
+            dedupe.set(key, dest);
+        }
+    });
+
+    const uniqueDestinations = Array.from(dedupe.values());
+    if (!uniqueDestinations.length) {
+        hudStatus.textContent = 'Add one or more destination nodes for 1 → n parallel simulation.';
+        setStatusIdle('Awaiting destination selection');
+        updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+        return;
+    }
+
+    hudStatus.textContent = `Computing ${uniqueDestinations.length} parallel route(s)…`;
+
+    try {
+        const payloads = await Promise.all(
+            uniqueDestinations.map((destination) => fetchRoutePayload(source, destination))
+        );
+
+        if (!payloads.length) {
+            hudStatus.textContent = 'No valid routes generated.';
+            setStatusIdle('Awaiting destination selection');
+            updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+            return;
+        }
+
+        multiRunState = {
+            mode: 'parallel',
+            payloads,
+            currentIndex: null,
+            selectedIndex: 0,
+            completed: new Set(),
+            completedRoutes: [],
+            previewRoutes: payloads.map((payload, index) => {
+                const color = PARALLEL_ROUTE_COLORS[index % PARALLEL_ROUTE_COLORS.length];
+                return new RoutePreview(payload, {
+                    renderStyle: 'pending',
+                    treeColor: color,
+                    ringColor: color,
+                    strokeOpacity: 0.35,
+                    lineWidth: 3,
+                });
+            }),
+            source,
+        };
+
+        summary.textContent = `Parallel routes: ${payloads.length} destination(s)`;
+        renderMultiRouteList();
+
+        const flowEntries = payloads.map((payload, index) => {
+            const pathArray = Array.isArray(payload.path) ? payload.path : [];
+            const destination = pathArray[pathArray.length - 1] || payload.destination || source;
+            return {
+                phase: `Route ${index + 1}`,
+                title: `${safeNodeLabel(source)} → ${safeNodeLabel(destination)}`,
+                details: [
+                    `Hop count: ${payload.hopCount ?? 0}`,
+                    `Segments: ${Array.isArray(payload.segments) ? payload.segments.length : 0}`,
+                ],
+            };
+        });
+        renderFlow(flowEntries);
+
+        const firstPayload = payloads[0];
+        if (firstPayload) {
+            const previewEntry = Array.isArray(multiRunState.previewRoutes)
+                ? multiRunState.previewRoutes[0]
+                : null;
+            const previewColors = previewEntry
+                ? {
+                    treeColor: previewEntry.treeColor,
+                    ringColor: previewEntry.ringColor,
+                    strokeOpacity: 0.85,
+                    lineWidth: 4,
+                }
+                : null;
+            prepareRoute(firstPayload, {
+                contextLabel: `Parallel route 1 of ${payloads.length}`,
+                previewColors,
+                buttonLabel: 'Animate all',
+            });
+            lastRoutePayload = firstPayload;
+        }
+
+        hudStatus.textContent = `Parallel routes ready (${payloads.length}). Press "Animate all" or pick a route to inspect.`;
+        const hasSegments = payloads.some((payload) => Array.isArray(payload.segments) && payload.segments.length);
+        updateAnimateButton({ disabled: !hasSegments, busy: false, label: 'Animate all' });
+    } catch (error) {
+        console.error(error);
+        const message = error.message || 'Routing failed';
+        hudStatus.textContent = message;
+        setStatusIdle(message);
+        updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+        resetMultiRunState();
+    }
+}
+
+function runSequentialQueue(index) {
+    const defaultLabel = 'Animate sequence';
+
+    if (!multiRunState || multiRunState.mode !== 'sequence') {
+        updateAnimateButton({ disabled: false, busy: false, label: defaultLabel });
+        return;
+    }
+
+    const { payloads } = multiRunState;
+    if (!Array.isArray(payloads) || !payloads.length) {
+        hudStatus.textContent = 'No routes queued for sequential simulation.';
+        updateAnimateButton({ disabled: true, busy: false, label: defaultLabel });
+        return;
+    }
+
+    if (!Array.isArray(multiRunState.completedRoutes)) {
+        multiRunState.completedRoutes = [];
+    }
+
+    if (index >= payloads.length) {
+        multiRunState.currentIndex = null;
+        multiRunState.selectedIndex = null;
+        renderMultiRouteList();
+        hudStatus.textContent = 'Sequential simulation complete';
+        lastRoutePayload = payloads[payloads.length - 1];
+        updateAnimateButton({ disabled: false, busy: false, label: defaultLabel });
+        return;
+    }
+
+    multiRunState.currentIndex = index;
+    multiRunState.selectedIndex = index;
+    renderMultiRouteList();
+    highlightMultiRouteCard(index);
+
+    const payload = payloads[index];
+    hudStatus.textContent = `Animating route ${index + 1} of ${payloads.length}…`;
+    prepareRoute(payload, {
+        contextLabel: `Sequence ${index + 1} of ${payloads.length}`,
+        autoStart: true,
+    });
+
+    startAnimation(payload, {
+        onComplete: () => {
+            if (!multiRunState || multiRunState.mode !== 'sequence') {
+                updateAnimateButton({ disabled: false, busy: false, label: defaultLabel });
+                return;
+            }
+            if (Array.isArray(multiRunState.previewRoutes)) {
+                multiRunState.previewRoutes[index] = null;
+            }
+            multiRunState.completed.add(index);
+            if (!Array.isArray(multiRunState.completedRoutes)) {
+                multiRunState.completedRoutes = [];
+            }
+            const completedPreview = new RoutePreview(payload, { renderStyle: 'completed' });
+            multiRunState.completedRoutes.push(completedPreview);
+            routePreview = new RoutePreview(payload, { renderStyle: 'completed' });
+            renderTopology();
+            renderMultiRouteList();
+            runSequentialQueue(index + 1);
+        },
+        label: `Sequence ${index + 1}`,
+    });
+}
+
+function prepareRoute(payload, options = {}) {
     resetAllNodeRuntimeState();
     setNodePanelAutoTracking(autoNodeDetailsPreference);
     lastRoutePayload = payload;
-    routePreview = new RoutePreview(payload);
+    const previewStyle = options.previewStyle || 'active';
+    const previewColors = options.previewColors || {};
+    routePreview = new RoutePreview(payload, {
+        renderStyle: previewStyle,
+        treeColor: previewColors.treeColor,
+        ringColor: previewColors.ringColor,
+        lineWidth: previewColors.lineWidth,
+        strokeOpacity: previewColors.strokeOpacity,
+    });
     animationState = null;
     setRouteInfo(payload);
-    summary.textContent = `Hop count: ${payload.hopCount}`;
+    if (options.contextLabel) {
+        summary.textContent = `${options.contextLabel} · Hops: ${payload.hopCount}`;
+    } else {
+        summary.textContent = `Hop count: ${payload.hopCount}`;
+    }
     renderFlow(payload.flow);
     highlightFlowCard(0);
-    showRouteReadyStatus(payload);
-    const hasSegments = Array.isArray(payload.segments) && payload.segments.length > 0;
-    updateAnimateButton({ disabled: !hasSegments, busy: false });
-    if (hasSegments) {
-        hudStatus.textContent = 'Route ready. Click "Animate path" to begin.';
+    if (options.autoStart) {
+        updateAnimateButton({ disabled: true, busy: true, label: options.contextLabel || animateBtn?.dataset?.defaultLabel });
     } else {
-        hudStatus.textContent = 'Source and destination are identical.';
+        const transferPrompt = options.buttonLabel
+            ? `Press ${options.buttonLabel}`
+            : 'Press Animate';
+        showRouteReadyStatus(payload, { transferText: transferPrompt });
+    }
+    const hasSegments = Array.isArray(payload.segments) && payload.segments.length > 0;
+    if (!options.autoStart) {
+        updateAnimateButton({
+            disabled: !hasSegments,
+            busy: false,
+            label: options.buttonLabel || options.contextLabel || animateBtn?.dataset?.defaultLabel,
+        });
+        if (hasSegments) {
+            hudStatus.textContent = options.contextHint
+                || 'Route ready. Click "Animate path" to begin.';
+        } else {
+            hudStatus.textContent = 'Source and destination are identical.';
+        }
     }
     if (Array.isArray(payload.path) && payload.path.length) {
         focusNode(makeNodeId(payload.path[0]), {
@@ -1677,27 +2594,114 @@ function prepareRoute(payload) {
 }
 
 function playAnimation() {
+    if (multiRunState) {
+        if (
+            multiRunState.mode === 'parallel'
+            && Array.isArray(multiRunState.payloads)
+            && multiRunState.payloads.length
+        ) {
+            startAnimation(multiRunState.payloads[0], {
+                parallelPayloads: multiRunState.payloads,
+                label: 'Animate all',
+                onComplete: () => {
+                    hudStatus.textContent = 'Parallel transmissions complete';
+                },
+            });
+            return;
+        }
+
+        if (multiRunState.mode === 'sequence') {
+            if (animationState) {
+                return;
+            }
+
+            const payloads = Array.isArray(multiRunState.payloads) ? multiRunState.payloads : [];
+            if (!payloads.length) {
+                hudStatus.textContent = 'Add destinations before animating.';
+                return;
+            }
+
+            if (!(multiRunState.completed instanceof Set)) {
+                multiRunState.completed = new Set();
+            }
+
+            const total = payloads.length;
+            const completedSet = multiRunState.completed;
+            let startIndex = 0;
+
+            if (completedSet.size && completedSet.size < total) {
+                for (let i = 0; i < total; i += 1) {
+                    if (!completedSet.has(i)) {
+                        startIndex = i;
+                        break;
+                    }
+                }
+            } else if (completedSet.size === total) {
+                multiRunState.completed = new Set();
+                multiRunState.completedRoutes = [];
+                if (Array.isArray(multiRunState.payloads)) {
+                    multiRunState.previewRoutes = multiRunState.payloads.map((payload) => new RoutePreview(payload, {
+                        renderStyle: 'pending',
+                        strokeOpacity: 0.45,
+                    }));
+                }
+                routePreview = null;
+                renderTopology();
+                renderMultiRouteList();
+                startIndex = 0;
+            } else if (typeof multiRunState.selectedIndex === 'number') {
+                startIndex = multiRunState.selectedIndex;
+            }
+
+            if (!Array.isArray(multiRunState.completedRoutes)) {
+                multiRunState.completedRoutes = [];
+            }
+
+            multiRunState.selectedIndex = startIndex;
+            runSequentialQueue(startIndex);
+            return;
+        }
+    }
+
     if (!lastRoutePayload) {
         hudStatus.textContent = 'Simulate the route first.';
         return;
     }
+
     startAnimation(lastRoutePayload);
 }
 
-function startAnimation(payload) {
+function startAnimation(payload, options = {}) {
+    const opts = {
+        onComplete: null,
+        label: null,
+        parallelPayloads: null,
+        ...options,
+    };
+
+    const disableLabel = opts.label || animateBtn?.dataset?.currentLabel || animateBtn?.dataset?.defaultLabel;
+
     if (!payload || !Array.isArray(payload.segments) || !payload.segments.length) {
-        updateAnimateButton({ disabled: true, busy: false });
+        updateAnimateButton({ disabled: true, busy: false, label: disableLabel });
         return;
     }
     cancelAnimationFrame(animationFrame);
     resetAllNodeRuntimeState();
     routePreview = null;
-    animationState = new RouteAnimation(payload, speedMultiplier);
+    if (Array.isArray(opts.parallelPayloads) && opts.parallelPayloads.length) {
+        animationState = new ParallelRouteController(opts.parallelPayloads, speedMultiplier);
+    } else {
+        animationState = new RouteAnimation(payload, speedMultiplier);
+    }
+    animationOptions = opts;
     setNodePanelAutoTracking(autoNodeDetailsPreference);
-    updateAnimateButton({ disabled: true, busy: true });
-    hudStatus.textContent = 'Animating route…';
-    const firstNode = Array.isArray(animationState.path) && animationState.path.length
-        ? animationState.path[0]
+    updateAnimateButton({ disabled: true, busy: true, label: disableLabel });
+    hudStatus.textContent = opts.parallelPayloads ? 'Animating parallel routes…' : 'Animating route…';
+    const firstPath = Array.isArray(animationState.path) && animationState.path.length
+        ? animationState.path
+        : Array.isArray(routePreview?.path) ? routePreview.path : payload.path || [];
+    const firstNode = Array.isArray(firstPath) && firstPath.length
+        ? firstPath[0]
         : null;
     if (firstNode) {
         focusNode(makeNodeId(firstNode), {
@@ -1711,53 +2715,119 @@ function startAnimation(payload) {
     function step(timestamp) {
         if (!animationState) return;
         animationState.update(timestamp);
-        const status = animationState.currentStatus();
-        updateStatusBar(status);
-        if (status && typeof status.flowIndex === 'number') {
-            highlightFlowCard(status.flowIndex);
-        }
-        updateNodeRuntimeFromStatus(status);
-        if (nodePanelAutoTracking && status && status.segment) {
-            const autoNode = makeNodeId(status.segment.to);
-            if (selectedNodeId !== autoNode) {
-                focusNode(autoNode, {
-                    auto: true,
-                    openPanelOnFocus: nodePanelAutoTracking,
-                });
+
+        if (animationState.mode === 'parallel' && Array.isArray(animationState.animations)) {
+            const statuses = animationState.animations.map((animation) => animation.currentStatus());
+            const aggregate = aggregateParallelStatuses(statuses);
+            updateStatusBar(aggregate);
+            statuses.forEach((status, index) => updateNodeRuntimeFromStatus(status, animationState.animations[index]));
+        } else {
+            const status = animationState.currentStatus();
+            updateStatusBar(status);
+            if (status && typeof status.flowIndex === 'number') {
+                highlightFlowCard(status.flowIndex);
+            }
+            updateNodeRuntimeFromStatus(status, animationState);
+            if (nodePanelAutoTracking && status && status.segment) {
+                const autoNode = makeNodeId(status.segment.to);
+                if (selectedNodeId !== autoNode) {
+                    focusNode(autoNode, {
+                        auto: true,
+                        openPanelOnFocus: nodePanelAutoTracking,
+                    });
+                } else if (selectedNodeId) {
+                    updateNodePanelContent();
+                }
             } else if (selectedNodeId) {
                 updateNodePanelContent();
             }
-        } else if (selectedNodeId) {
-            updateNodePanelContent();
         }
+
         renderTopology();
 
-        if (animationState.isComplete()) {
-            hudStatus.textContent = 'Transmission complete';
+        const isComplete = animationState.mode === 'parallel'
+            ? animationState.isComplete()
+            : animationState.isComplete();
+
+        if (isComplete) {
+            hudStatus.textContent = animationState.mode === 'parallel'
+                ? 'Parallel transmissions complete'
+                : 'Transmission complete';
             highlightFlowCard(flowCardElements.length - 1);
             const completedStatus = {
-                ...status,
                 phaseKey: 'completed',
                 phaseLabel: 'Completed',
                 signalText: 'Idle',
                 signalStates: { req: 'sleep', ack: 'sleep', data: 'sleep' },
-                transferText: 'Packet delivered',
+                transferText: animationState.mode === 'parallel' ? 'Packets delivered' : 'Packet delivered',
                 progressPercent: 100,
+                hopText: statusElements.hopValue.textContent,
+                nodesText: statusElements.hopNodes.textContent,
+                timer: parseInt(statusElements.timerValue.textContent.replace(/[^0-9]/g, ''), 10) || 0,
             };
             updateStatusBar(completedStatus);
-            updateNodeRuntimeFromStatus(completedStatus);
-            if (nodePanelAutoTracking && Array.isArray(payload.path) && payload.path.length) {
-                const destinationNode = payload.path[payload.path.length - 1];
-                focusNode(makeNodeId(destinationNode), {
-                    auto: true,
-                    openPanelOnFocus: nodePanelAutoTracking,
+            if (Array.isArray(opts.parallelPayloads) && opts.parallelPayloads.length) {
+                opts.parallelPayloads.forEach((payloadItem) => {
+                    const finalSegment = Array.isArray(payloadItem.segments) && payloadItem.segments.length
+                        ? payloadItem.segments[payloadItem.segments.length - 1]
+                        : null;
+                    const status = {
+                        ...completedStatus,
+                        segment: finalSegment,
+                        phaseKey: 'completed',
+                        phaseLabel: 'Completed',
+                    };
+                    updateNodeRuntimeFromStatus(status, payloadItem);
                 });
+            } else {
+                updateNodeRuntimeFromStatus(completedStatus, animationState);
+                if (nodePanelAutoTracking && Array.isArray(payload.path) && payload.path.length) {
+                    const destinationNode = payload.path[payload.path.length - 1];
+                    focusNode(makeNodeId(destinationNode), {
+                        auto: true,
+                        openPanelOnFocus: nodePanelAutoTracking,
+                    });
+                }
             }
-            routePreview = new RoutePreview(payload);
+            if (multiRunState && Array.isArray(multiRunState.previewRoutes)) {
+                if (multiRunState.mode === 'parallel') {
+                    multiRunState.previewRoutes.forEach((preview) => {
+                        if (!preview) return;
+                        preview.renderStyle = 'completed';
+                        if (typeof preview.strokeOpacity !== 'number' || preview.strokeOpacity < 0.85) {
+                            preview.strokeOpacity = 0.85;
+                        }
+                    });
+                }
+            }
+            const completedSignature = routePathSignature(payload?.path);
+            let completedPreviewColors = null;
+            if (Array.isArray(multiRunState?.previewRoutes) && completedSignature) {
+                const matchingPreview = multiRunState.previewRoutes.find((preview) => {
+                    if (!preview) return false;
+                    return routePathSignature(preview.path) === completedSignature;
+                });
+                if (matchingPreview) {
+                    completedPreviewColors = {
+                        treeColor: matchingPreview.treeColor,
+                        ringColor: matchingPreview.ringColor,
+                    };
+                }
+            }
+            routePreview = new RoutePreview(payload, {
+                renderStyle: 'completed',
+                treeColor: completedPreviewColors?.treeColor,
+                ringColor: completedPreviewColors?.ringColor,
+            });
+            const onComplete = typeof opts.onComplete === 'function' ? opts.onComplete : null;
             animationState = null;
-            updateAnimateButton({ disabled: false, busy: false });
+            animationOptions = null;
+            updateAnimateButton({ disabled: false, busy: false, label: disableLabel });
             renderTopology();
             animationFrame = null;
+            if (onComplete) {
+                onComplete();
+            }
             return;
         }
 
@@ -1788,6 +2858,7 @@ function resetSimulation() {
     routePreview = null;
     lastRoutePayload = null;
     updateAnimateButton({ disabled: true, busy: false });
+    resetMultiRunState();
     if (selectedNodeId) {
         selectedNodeId = null;
         resetNodePanelContent();
@@ -1933,7 +3004,21 @@ document.addEventListener('keydown', (event) => {
 });
 
 if (simulateBtn) {
-    simulateBtn.addEventListener('click', simulateRoute);
+    simulateBtn.addEventListener('click', () => {
+        const mode = simulationModeSelect ? simulationModeSelect.value : 'single';
+        switch (mode) {
+            case 'sequence':
+                simulateSequentialRoutes();
+                break;
+            case 'parallel':
+                simulateParallelRoutes();
+                break;
+            case 'single':
+            default:
+                simulateSingleRoute();
+                break;
+        }
+    });
 }
 if (animateBtn) {
     animateBtn.addEventListener('click', playAnimation);
@@ -1954,6 +3039,44 @@ if (destinationSelect) {
     });
 }
 
+if (destinationCandidateSelect) {
+    destinationCandidateSelect.addEventListener('change', () => {
+        setPickMode(null);
+        if (hudStatus) {
+            const meta = parseSelectValue(destinationCandidateSelect.value);
+            hudStatus.textContent = `Candidate destination: ${safeNodeLabel(meta)}.`;
+        }
+    });
+}
+
+if (addMultiDestinationBtn) {
+    addMultiDestinationBtn.addEventListener('click', () => {
+        if (!destinationCandidateSelect) return;
+        addMultiDestination(destinationCandidateSelect.value);
+    });
+}
+
+if (clearMultiDestinationsBtn) {
+    clearMultiDestinationsBtn.addEventListener('click', () => {
+        clearMultiDestinationList();
+    });
+}
+
+if (multiDestinationList) {
+    multiDestinationList.addEventListener('click', (event) => {
+        const trigger = event.target.closest('[data-remove-destination]');
+        if (!trigger) return;
+        removeMultiDestination(trigger.dataset.removeDestination, { announce: true });
+    });
+    multiDestinationList.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        const trigger = event.target.closest('[data-remove-destination]');
+        if (!trigger) return;
+        event.preventDefault();
+        removeMultiDestination(trigger.dataset.removeDestination, { announce: true });
+    });
+}
+
 if (pickSourceBtn) {
     pickSourceBtn.addEventListener('click', () => {
         setPickMode(pickMode === 'source' ? null : 'source');
@@ -1962,6 +3085,12 @@ if (pickSourceBtn) {
 
 if (pickDestinationBtn) {
     pickDestinationBtn.addEventListener('click', () => {
+        setPickMode(pickMode === 'destination' ? null : 'destination');
+    });
+}
+
+if (pickDestinationMultiBtn) {
+    pickDestinationMultiBtn.addEventListener('click', () => {
         setPickMode(pickMode === 'destination' ? null : 'destination');
     });
 }
@@ -2057,6 +3186,62 @@ if (autoNodeDetailsBtn) {
 
 syncAutoNodeDetailsControl();
 setPickMode(null);
+renderMultiDestinationList();
+
+function applySimulationModeUI(mode) {
+    const normalizedMode = mode || (simulationModeSelect ? simulationModeSelect.value : 'single');
+    const isMulti = normalizedMode === 'sequence' || normalizedMode === 'parallel';
+    setElementVisibility(singleDestinationField, !isMulti);
+    setElementVisibility(multiDestinationField, isMulti);
+    if (multiRouteList) {
+        multiRouteList.style.display = normalizedMode === 'single' ? 'none' : multiRouteList.style.display;
+    }
+    if (isMulti) {
+        currentDestinationId = null;
+        if (destinationCandidateSelect) {
+            let fallback = destinationSelect?.value || destinationCandidateSelect.value;
+            if (!fallback && destinationCandidateSelect.options.length) {
+                fallback = destinationCandidateSelect.options[0].value;
+            }
+            if (fallback) {
+                setSelectValue(destinationCandidateSelect, fallback);
+            }
+        }
+        renderMultiDestinationList();
+    } else {
+        syncSelectionState();
+    }
+    if (normalizedMode === 'parallel') {
+        updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+    } else {
+        updateAnimateButton({ disabled: true, busy: false, label: animateBtn?.dataset?.defaultLabel });
+    }
+    renderTopology();
+}
+
+if (simulationModeSelect) {
+    applySimulationModeUI(simulationModeSelect.value);
+    simulationModeSelect.addEventListener('change', () => {
+        if (animateBtn) {
+            animateBtn.dataset.currentLabel = animateBtn.dataset.defaultLabel;
+        }
+        applySimulationModeUI(simulationModeSelect.value);
+        resetSimulation();
+        summary.textContent = '';
+        if (simulationModeSelect.value === 'parallel') {
+            hudStatus.textContent = 'Parallel mode selected. Choose multiple destinations to animate together.';
+        } else if (simulationModeSelect.value === 'sequence') {
+            hudStatus.textContent = 'Sequence mode selected. Destinations will animate one after another.';
+        } else {
+            hudStatus.textContent = '1 → 1 mode selected. Pick single destination to simulate.';
+        }
+    });
+}
+
+if (multiRouteList) {
+    multiRouteList.addEventListener('click', handleMultiRouteListClick);
+    multiRouteList.addEventListener('keydown', handleMultiRouteListKeydown);
+}
 
 applySignalState({ req: 'sleep', ack: 'sleep', data: 'sleep' });
 syncSidebarForViewport();

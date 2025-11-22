@@ -29,7 +29,7 @@
                         style="font-family: 'Space Grotesk', sans-serif;">Topology</h2>
                     <div class="form-control">
                         <label for="levelInput" style="font-size: small;">Number of rings</label> 
-                        <input id="levelInput" type="number" min="2" max="11" value="4">
+                        <input id="levelInput" type="number" min="2" max="6" value="4">
                     </div>
                     <button id="applyTopologyBtn" class="primary-btn">Apply topology</button>
                 </section>
@@ -37,18 +37,37 @@
                 <section class="sidebar__section" aria-labelledby="routing-controls">
                     <h2 id="routing-controls">Routing</h2>
                     <div class="form-control">
+                        <label for="simulationMode">Simulation type</label>
+                        <select id="simulationMode">
+                            <option value="single">1 → 1</option>
+                            <option value="sequence">1 → n (sequential)</option>
+                            <option value="parallel">1 → n (parallel)</option>
+                        </select>
+                    </div>
+                    <div class="form-control">
                         <label for="sourceSelect">🟢 Source node</label>
                         <div class="input-with-action">
                             <select id="sourceSelect"></select>
                             <button id="pickSourceBtn" class="mini-btn" type="button" aria-pressed="false" title="Pick source from canvas">Pick</button>
                         </div>
                     </div>
-                    <div class="form-control">
+                    <div class="form-control" data-mode-area="single">
                         <label for="destinationSelect">🔴 Destination node</label>
                         <div class="input-with-action">
                             <select id="destinationSelect"></select>
                             <button id="pickDestinationBtn" class="mini-btn" type="button" aria-pressed="false" title="Pick destination from canvas">Pick</button>
                         </div>
+                    </div>
+                    <div class="form-control" data-mode-area="multi" style="display: none;">
+                        <label for="destinationCandidateSelect">🔴 Destination nodes</label>
+                        <div class="input-with-action">
+                            <select id="destinationCandidateSelect"></select>
+                            <button id="clearMultiDestinationsBtn" class="mini-btn" type="button" title="Clear destinations">Clear all</button>
+                            <button id="addMultiDestinationBtn" class="mini-btn" type="button" title="Add destination to list">+</button>
+                            <button id="pickDestinationMultiBtn" class="mini-btn" type="button" aria-pressed="false" title="Pick destination from canvas">Pick</button>
+                        </div>
+                        <div id="multiDestinationList" class="destination-list" role="list"></div>
+                        
                     </div>
                     <div class="form-control form-control--inline">
                         <label for="speedControl">Speed</label>
@@ -57,18 +76,23 @@
                     <div class="button-row">
                         <button id="simulateBtn" class="primary-btn">Simulate route</button>
                         <button id="animateBtn" class="ghost-btn" disabled>Animate path</button>
+                        
+                    </div>
+                    <div class="button-row">
                         <button id="resetBtn" class="ghost-btn">Reset</button>
                     </div>
+
                     <button id="autoNodeDetailsBtn" class="control-toggle" type="button" aria-pressed="false">
                         <span class="control-toggle__indicator" aria-hidden="true"></span>
                         <small class="control-toggle__state">( Off )</small>
                         <span class="control-toggle__label">
-                            Auto node details
-                            
+                            Auto node details 
                         </span>
                     </button>
                     <span id="routeSummary" class="summary">Summary :</span>
+                    
                 </section>
+                <div id="multiRouteList" class="multi-route-list" aria-live="polite" style="display: none;"></div>
 
                 <section class="sidebar__section" aria-labelledby="flow-timeline">
                     <h2 id="flow-timeline">Flow timeline</h2>
@@ -190,7 +214,7 @@
         <header class="node-panel__header">
             <div class="node-panel__heading">
                 <p class="node-panel__eyebrow">Node details</p>
-                <h2 id="nodePanelTitle">(0, 0)</h2>
+                <h2 id="nodePanelTitle">—</h2>
                 <p id="nodePanelSubhead" class="node-panel__subhead">Select a node to inspect</p>
             </div>
             <button id="nodePanelClose" class="node-panel__close" type="button" aria-label="Close node details">×</button>

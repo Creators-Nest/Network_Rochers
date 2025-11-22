@@ -469,12 +469,51 @@ body {
     flex: 1;
 }
 
+.destination-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.destination-list__empty {
+    margin: 0;
+    font-size: 0.5rem;
+    color: #94a3b8;
+}
+
+.destination-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding-left: 6px;
+    padding-right: 0px;
+    padding-top: 0px;
+    padding-bottom: 0px;
+    border-radius: 999px;
+    border: 1px solid rgba(37, 99, 235, 0.24);
+    background: rgba(226, 240, 255, 0.72);
+    font-size: 0.65rem;
+    font-weight: 500;
+}
+
+.destination-pill__remove {
+    padding: 2px 3px;
+    font-size: 0.5rem;
+}
+
+.destination-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 8px;
+}
+
 .mini-btn {
     border: 1px solid rgba(37, 99, 235, 0.28);
     background: rgba(225, 239, 255, 0.9);
     color: #1d4ed8;
     border-radius: 16px;
-    padding: 7px 12px;
+    padding: 4px 10px;
     font-size: 0.75rem;
     font-weight: 600;
     cursor: pointer;
