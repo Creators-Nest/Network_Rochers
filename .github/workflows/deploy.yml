@@ -22,6 +22,5 @@ jobs:
           cd ~/Network_Rochers
           git pull
           source venv/bin/activate
-          pip install -r ricobit_simulator_web/webapp/requirements.txt
-          sudo systemctl restart gunicorn
+          sudo systemctl restart noc
           sudo systemctl restart nginx
