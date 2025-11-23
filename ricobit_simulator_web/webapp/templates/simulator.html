@@ -40,7 +40,6 @@
                         <label for="simulationMode">Simulation type</label>
                         <select id="simulationMode">
                             <option value="single">1 → 1</option>
-                            <option value="sequence">1 → n (sequential)</option>
                             <option value="parallel">1 → n (parallel)</option>
                         </select>
                     </div>
@@ -203,6 +202,8 @@
                     <div class="canvas-controls" role="group" aria-label="View controls">
                         <button id="cursorModeBtn" type="button" title="Toggle scroll zoom" aria-pressed="false">⊹</button>
                         <button id="resetViewBtn" type="button" title="Reset view">⟳</button>
+                        <button id="pauseAnimationBtn" type="button" title="Pause animation" aria-pressed="false" disabled>⏸</button>
+                        <button id="restartAnimationBtn" type="button" title="Restart animation" disabled>↺</button>
                         <button id="zoomInBtn" type="button" title="Zoom in">＋</button>
                         <button id="zoomOutBtn" type="button" title="Zoom out">－</button>
                     </div>
@@ -263,6 +264,16 @@
         <section class="node-panel__section" aria-labelledby="node-panel-neighbors-label">
             <h3 id="node-panel-neighbors-label">Links</h3>
             <ul id="nodePanelNeighbors" class="node-panel__neighbors"></ul>
+        </section>
+
+        <section class="node-panel__section" aria-labelledby="node-panel-logic-label">
+            <h3 id="node-panel-logic-label">Logic modules</h3>
+            <dl id="nodePanelLogic" class="node-panel__logic"></dl>
+        </section>
+
+        <section class="node-panel__section" aria-labelledby="node-panel-interfaces-label">
+            <h3 id="node-panel-interfaces-label">Interface detail</h3>
+            <div id="nodePanelInterfaces" class="interface-list"></div>
         </section>
         </aside>
     </div>

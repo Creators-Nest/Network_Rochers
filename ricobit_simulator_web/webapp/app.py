@@ -58,19 +58,89 @@ class AppState:
             self.simulator = Simulator(self.topology)
             self.router = self.topology.router
 
+    @staticmethod
+    def _serialize_packet(packet) -> Dict[str, object] | None:
+        """Convert a packet into a JSON-serialisable structure."""
+
+        if packet is None:
+            return None
+
+        source_ring, source_index = packet.source_address
+        dest_ring, dest_index = packet.dest_address
+        return {
+            "source": {"ring": source_ring, "index": source_index},
+            "destination": {"ring": dest_ring, "index": dest_index},
+            "data": getattr(packet, "data", None),
+            "startTimer": getattr(packet, "start_timer", None),
+            "endTimer": getattr(packet, "end_timer", None),
+        }
+
     def _build_node_payload(self, node) -> Dict[str, object]:
         ring, index = node.address
         neighbors_payload: List[Dict[str, object]] = []
+        interfaces_payload: List[Dict[str, object]] = []
+
+        def _buffer_snapshot(buffer) -> Dict[str, object]:
+            if buffer is None or not hasattr(buffer, "buffer"):
+                return {"used": 0, "capacity": 0, "head": None}
+
+            store = buffer.buffer
+            used = len(store)
+            capacity = getattr(store, "maxlen", 0) or 0
+            head_packet = next(iter(store), None)
+            return {
+                "used": used,
+                "capacity": capacity,
+                "head": self._serialize_packet(head_packet),
+            }
+
+        busy_interface_count = 0
 
         for neighbor_address, interface in sorted(node.interfaces.items()):
             neighbor_ring, neighbor_index = neighbor_address
+            send_snapshot = _buffer_snapshot(interface.send_buffer)
+            receive_snapshot = _buffer_snapshot(interface.receive_buffer)
+
             neighbors_payload.append(
                 {
                     "ring": neighbor_ring,
                     "index": neighbor_index,
                     "type": "ring" if neighbor_ring == ring else "tree",
-                    "sendCapacity": getattr(getattr(interface.send_buffer, "buffer", None), "maxlen", 0),
-                    "receiveCapacity": getattr(getattr(interface.receive_buffer, "buffer", None), "maxlen", 0),
+                    "sendCapacity": send_snapshot["capacity"],
+                    "receiveCapacity": receive_snapshot["capacity"],
+                    "sendUsage": send_snapshot["used"],
+                    "receiveUsage": receive_snapshot["used"],
+                }
+            )
+
+            status_bits = {
+                "busy": bool(interface.bit_Busy),
+                "transfer": bool(interface.bit_Transfer),
+                "receive": bool(interface.bit_Receive),
+            }
+            if status_bits["busy"]:
+                busy_interface_count += 1
+
+            interfaces_payload.append(
+                {
+                    "neighbor": {"ring": neighbor_ring, "index": neighbor_index},
+                    "linkType": "ring" if neighbor_ring == ring else "tree",
+                    "sendBuffer": send_snapshot,
+                    "receiveBuffer": receive_snapshot,
+                    "sendRegister": self._serialize_packet(interface.send_register),
+                    "receiveRegister": self._serialize_packet(interface.receive_register),
+                    "statusBits": status_bits,
+                    "handshakePins": {
+                        "req": bool(interface.pin_REQ),
+                        "ack": bool(interface.pin_ACK),
+                        "data": interface.pin_DATA is not None,
+                        "choke": bool(interface.pin_CHOKE),
+                    },
+                    "dataLine": self._serialize_packet(interface.pin_DATA),
+                    "timeout": {
+                        "value": getattr(interface, "timeout_counter", 0),
+                        "limit": getattr(interface, "TIMEOUT_LIMIT", 0),
+                    },
                 }
             )
 
@@ -85,6 +155,36 @@ class AppState:
                 }
             )
 
+        application_packets = list(node.application_logic_buffer)
+        application_buffer_payload = {
+            "count": len(application_packets),
+            "packets": [self._serialize_packet(packet) for packet in application_packets],
+        }
+
+        logic_payload = {
+            "routing": {
+                "entryCount": len(routing_entries),
+                "description": f"{len(routing_entries)} destination entries",
+            },
+            "application": {
+                "bufferedPackets": application_buffer_payload["count"],
+                "description": (
+                    "Application buffer empty"
+                    if application_buffer_payload["count"] == 0
+                    else f"{application_buffer_payload['count']} packet(s) staged for delivery"
+                ),
+            },
+            "control": {
+                "busyInterfaces": busy_interface_count,
+                "totalInterfaces": len(node.interfaces),
+                "description": (
+                    "All interfaces idle"
+                    if busy_interface_count == 0
+                    else f"{busy_interface_count} of {len(node.interfaces)} interfaces active"
+                ),
+            },
+        }
+
         return {
             "id": f"{ring}-{index}",
             "ring": ring,
@@ -92,6 +192,9 @@ class AppState:
             "degree": len(node.interfaces),
             "neighbors": neighbors_payload,
             "routingTable": routing_entries,
+            "interfaces": interfaces_payload,
+            "applicationBuffer": application_buffer_payload,
+            "logic": logic_payload,
         }
 
     def node_payload(self, address: NodeAddress) -> Dict[str, object]:

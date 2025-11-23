@@ -31,6 +31,8 @@ const zoomInBtn = document.getElementById('zoomInBtn');
 const zoomOutBtn = document.getElementById('zoomOutBtn');
 const resetViewBtn = document.getElementById('resetViewBtn');
 const cursorModeBtn = document.getElementById('cursorModeBtn');
+const pauseAnimationBtn = document.getElementById('pauseAnimationBtn');
+const restartAnimationBtn = document.getElementById('restartAnimationBtn');
 const sidebarToggle = document.getElementById('sidebarToggle');
 const sidebarCloseBtn = document.getElementById('sidebarClose');
 const sidebarOverlay = document.getElementById('sidebarOverlay');
@@ -44,6 +46,8 @@ const nodePanelRing = document.getElementById('nodePanelRing');
 const nodePanelDegree = document.getElementById('nodePanelDegree');
 const nodePanelRoutes = document.getElementById('nodePanelRoutes');
 const nodePanelNeighbors = document.getElementById('nodePanelNeighbors');
+const nodePanelLogic = document.getElementById('nodePanelLogic');
+const nodePanelInterfaces = document.getElementById('nodePanelInterfaces');
 const nodePanelSendBuffer = document.getElementById('nodePanelSendBuffer');
 const nodePanelReceiveBuffer = document.getElementById('nodePanelReceiveBuffer');
 const nodePanelAppBuffer = document.getElementById('nodePanelAppBuffer');
@@ -118,6 +122,7 @@ const PREVIEW_STYLE_DEFAULTS = {
 };
 
 const PARALLEL_ROUTE_COLORS = ['#ff6a00ff', '#00aeffff', '#8400ffff', '#f60303ff', '#05faddff'];
+const HANDSHAKE_PHASES = new Set(['req', 'ack']);
 
 const STAGE_INDICATOR_COLORS = {
     ready: colors.nodeSelected,
@@ -148,6 +153,7 @@ let topologyData = null;
 let layoutCache = null;
 let animationState = null;
 let animationFrame = null;
+let animationStep = null;
 let flowCardElements = [];
 let currentRouteInfo = null;
 let speedMultiplier = parseFloat(speedControl.value) || 0.6;
@@ -164,6 +170,8 @@ let lastRoutePayload = null;
 let multiRunState = null;
 const multiDestinations = [];
 let animationOptions = null;
+let animationPaused = false;
+let animationPauseTimestamp = null;
 let pickMode = null;
 let currentSourceId = null;
 let currentDestinationId = null;
@@ -200,31 +208,95 @@ function makeNodeId(node) {
     return `${node.ring}-${node.index}`;
 }
 
-function defaultNodeRuntimeState() {
+function defaultInterfaceRuntime(metaInterface = null) {
+    const sendCapacity = Number(metaInterface?.sendBuffer?.capacity ?? 0) || 0;
+    const receiveCapacity = Number(metaInterface?.receiveBuffer?.capacity ?? 0) || 0;
+    const timeoutLimit = Number(metaInterface?.timeout?.limit ?? metaInterface?.timeout?.TIMEOUT_LIMIT ?? 0) || 0;
+    return {
+        sendBuffer: {
+            used: 0,
+            capacity: sendCapacity,
+            head: null,
+            state: 'idle',
+        },
+        receiveBuffer: {
+            used: 0,
+            capacity: receiveCapacity,
+            head: null,
+            state: 'idle',
+        },
+        statusBits: {
+            busy: false,
+            transfer: false,
+            receive: false,
+        },
+        handshakePins: {
+            req: false,
+            ack: false,
+            data: false,
+            choke: false,
+        },
+        sendRegister: null,
+        receiveRegister: null,
+        dataLine: null,
+        timeout: {
+            value: 0,
+            limit: timeoutLimit,
+        },
+        activePackets: new Map(),
+    };
+}
+
+function defaultNodeRuntimeState(meta = null) {
+    const interfaces = new Map();
+    if (meta && Array.isArray(meta.interfaces)) {
+        meta.interfaces.forEach((iface) => {
+            if (!iface || !iface.neighbor) return;
+            const neighborId = makeNodeId(iface.neighbor);
+            interfaces.set(neighborId, defaultInterfaceRuntime(iface));
+        });
+    }
     return {
         sendBuffer: 'idle',
         receiveBuffer: 'idle',
         applicationBuffer: 0,
         handshake: 'idle',
         lastUpdated: 0,
+        interfaces,
     };
 }
 
 function ensureNodeRuntimeState(nodeId) {
     if (!nodeRuntimeState.has(nodeId)) {
-        nodeRuntimeState.set(nodeId, defaultNodeRuntimeState());
+        const meta = nodeMeta.get(nodeId) || null;
+        nodeRuntimeState.set(nodeId, defaultNodeRuntimeState(meta));
     }
     return nodeRuntimeState.get(nodeId);
 }
 
 function resetAllNodeRuntimeState() {
-    nodeRuntimeState.forEach((state) => {
-        state.sendBuffer = 'idle';
-        state.receiveBuffer = 'idle';
-        state.applicationBuffer = 0;
-        state.handshake = 'idle';
-        state.lastUpdated = 0;
+    nodeRuntimeState.forEach((_, nodeId) => {
+        const meta = nodeMeta.get(nodeId) || null;
+        nodeRuntimeState.set(nodeId, defaultNodeRuntimeState(meta));
     });
+}
+
+function ensureInterfaceRuntimeState(nodeId, neighbor) {
+    if (!neighbor) return null;
+    const runtime = ensureNodeRuntimeState(nodeId);
+    if (!(runtime.interfaces instanceof Map)) {
+        runtime.interfaces = new Map();
+    }
+    const neighborId = makeNodeId(neighbor);
+    if (!runtime.interfaces.has(neighborId)) {
+        const meta = nodeMeta.get(nodeId) || null;
+        let metaInterface = null;
+        if (meta && Array.isArray(meta.interfaces)) {
+            metaInterface = meta.interfaces.find((iface) => iface?.neighbor && makeNodeId(iface.neighbor) === neighborId) || null;
+        }
+        runtime.interfaces.set(neighborId, defaultInterfaceRuntime(metaInterface));
+    }
+    return runtime.interfaces.get(neighborId);
 }
 
 function resetMultiRunState({ clearList = true } = {}) {
@@ -306,7 +378,7 @@ function getSimulationMode() {
 
 function isMultiSimulationMode() {
     const mode = getSimulationMode();
-    return mode === 'sequence' || mode === 'parallel';
+    return mode === 'parallel';
 }
 
 function renderMultiDestinationList() {
@@ -596,6 +668,587 @@ function updateBufferChip(element, state, textOverride) {
     element.textContent = textOverride || label;
 }
 
+function applyBufferRuntime(buffer, { used, state, head } = {}) {
+    if (!buffer || typeof buffer !== 'object') return;
+    if (Number.isFinite(used)) {
+        if (Number.isFinite(buffer.capacity) && buffer.capacity > 0) {
+            buffer.used = clamp(used, 0, buffer.capacity);
+        } else {
+            buffer.used = used;
+            if (!Number.isFinite(buffer.capacity) || buffer.capacity < used) {
+                buffer.capacity = used;
+            }
+        }
+    }
+    if (head !== undefined) {
+        buffer.head = head;
+    }
+    if (state) {
+        buffer.state = state;
+    }
+}
+
+function setHandshakePins(ifaceRuntime, pins = {}) {
+    if (!ifaceRuntime || typeof ifaceRuntime !== 'object') return;
+    const { handshakePins } = ifaceRuntime;
+    if (!handshakePins || typeof handshakePins !== 'object') return;
+    handshakePins.req = Boolean(pins.req);
+    handshakePins.ack = Boolean(pins.ack);
+    handshakePins.data = Boolean(pins.data);
+    handshakePins.choke = Boolean(pins.choke);
+}
+
+function setStatusBits(ifaceRuntime, bits = {}) {
+    if (!ifaceRuntime || typeof ifaceRuntime !== 'object') return;
+    const { statusBits } = ifaceRuntime;
+    if (!statusBits || typeof statusBits !== 'object') return;
+    statusBits.busy = Boolean(bits.busy);
+    statusBits.transfer = Boolean(bits.transfer);
+    statusBits.receive = Boolean(bits.receive);
+}
+
+function ensureActivePacketMap(ifaceRuntime) {
+    if (!ifaceRuntime) return null;
+    if (!(ifaceRuntime.activePackets instanceof Map)) {
+        ifaceRuntime.activePackets = new Map();
+    }
+    return ifaceRuntime.activePackets;
+}
+
+const STAGE_PRIORITY = {
+    ready: 1,
+    req: 2,
+    ack: 3,
+    data: 4,
+    release: 5,
+    completed: 6,
+};
+
+const SEND_BUFFER_STATE_BY_STAGE = {
+    ready: 'primed',
+    req: 'waiting',
+    ack: 'waiting',
+    data: 'transferring',
+    release: 'releasing',
+    completed: 'idle',
+};
+
+const RECEIVE_BUFFER_STATE_BY_STAGE = {
+    ready: 'idle',
+    req: 'idle',
+    ack: 'primed',
+    data: 'receiving',
+    release: 'delivered',
+    completed: 'delivered',
+};
+
+function pickRepresentativePacket(entries) {
+    if (!entries.length) return null;
+    return entries
+        .slice()
+        .sort((a, b) => {
+            const priorityDiff = (STAGE_PRIORITY[b.stage] || 0) - (STAGE_PRIORITY[a.stage] || 0);
+            if (priorityDiff !== 0) return priorityDiff;
+            return (b.lastUpdated || 0) - (a.lastUpdated || 0);
+        })[0];
+}
+
+function summarizeInterfaceRuntime(ifaceRuntime) {
+    if (!ifaceRuntime) return;
+    const packets = ensureActivePacketMap(ifaceRuntime);
+    if (!packets) return;
+
+    if (!ifaceRuntime.sendBuffer) {
+        ifaceRuntime.sendBuffer = { used: 0, capacity: 0, head: null, state: 'idle' };
+    }
+    if (!ifaceRuntime.receiveBuffer) {
+        ifaceRuntime.receiveBuffer = { used: 0, capacity: 0, head: null, state: 'idle' };
+    }
+    if (!ifaceRuntime.statusBits) {
+        ifaceRuntime.statusBits = { busy: false, transfer: false, receive: false };
+    }
+    if (!ifaceRuntime.handshakePins) {
+        ifaceRuntime.handshakePins = { req: false, ack: false, data: false, choke: false };
+    }
+
+    const outbound = [];
+    const inbound = [];
+    packets.forEach((info, key) => {
+        if (!info) return;
+        const entry = {
+            key,
+            stage: info.stage,
+            packet: info.packet || null,
+            lastUpdated: info.lastUpdated || 0,
+        };
+        if (info.direction === 'inbound') {
+            inbound.push(entry);
+        } else {
+            outbound.push(entry);
+        }
+    });
+
+    const outboundRep = pickRepresentativePacket(outbound);
+    const inboundRep = pickRepresentativePacket(inbound);
+
+    ifaceRuntime.sendBuffer.used = outbound.length;
+    ifaceRuntime.sendBuffer.state = outbound.length
+        ? SEND_BUFFER_STATE_BY_STAGE[outboundRep?.stage] || 'transferring'
+        : 'idle';
+    ifaceRuntime.sendBuffer.head = outboundRep?.packet || null;
+
+    ifaceRuntime.receiveBuffer.used = inbound.length;
+    ifaceRuntime.receiveBuffer.state = inbound.length
+        ? RECEIVE_BUFFER_STATE_BY_STAGE[inboundRep?.stage] || 'receiving'
+        : 'idle';
+    ifaceRuntime.receiveBuffer.head = inboundRep?.packet || null;
+
+    const outboundStages = outbound.map((entry) => entry.stage);
+    const inboundStages = inbound.map((entry) => entry.stage);
+
+    const anyReq = outboundStages.some((stage) => ['req', 'ack', 'data'].includes(stage))
+        || inboundStages.some((stage) => ['req', 'ack', 'data'].includes(stage));
+    const anyAck = outboundStages.some((stage) => ['ack', 'data', 'release'].includes(stage))
+        || inboundStages.some((stage) => ['ack', 'data', 'release'].includes(stage));
+    const anyData = outboundStages.includes('data') || inboundStages.includes('data');
+
+    ifaceRuntime.handshakePins.req = anyReq;
+    ifaceRuntime.handshakePins.ack = anyAck;
+    ifaceRuntime.handshakePins.data = anyData;
+    ifaceRuntime.handshakePins.choke = false;
+
+    ifaceRuntime.statusBits.busy = outbound.length > 0 || inbound.length > 0;
+    ifaceRuntime.statusBits.transfer = outboundStages.includes('data');
+    ifaceRuntime.statusBits.receive = inboundStages.includes('data');
+
+    ifaceRuntime.sendRegister = outboundRep?.packet || null;
+    ifaceRuntime.receiveRegister = inboundRep?.packet || null;
+    const dataRep = outbound.find((entry) => entry.stage === 'data') || inbound.find((entry) => entry.stage === 'data');
+    ifaceRuntime.dataLine = dataRep?.packet || null;
+
+    if (ifaceRuntime.timeout) {
+        ifaceRuntime.timeout.value = 0;
+    }
+}
+
+function recordInterfacePacketStage(ifaceRuntime, packetKey, {
+    direction = 'outbound',
+    stage,
+    packet = null,
+    timestamp = performance.now(),
+    remove = false,
+} = {}) {
+    if (!ifaceRuntime || !packetKey) return;
+    const packets = ensureActivePacketMap(ifaceRuntime);
+    if (!packets) return;
+
+    if (remove || stage === 'completed') {
+        packets.delete(packetKey);
+    } else {
+        const existing = packets.get(packetKey) || {};
+        packets.set(packetKey, {
+            direction: direction === 'inbound' ? 'inbound' : 'outbound',
+            stage,
+            packet: packet || existing.packet || null,
+            lastUpdated: timestamp,
+        });
+    }
+
+    summarizeInterfaceRuntime(ifaceRuntime);
+}
+
+function createPacketKey(status, animationContext, segment, fallbackDestination) {
+    if (status?.packetIndex) {
+        return `packet-${status.packetIndex}`;
+    }
+    if (animationContext?.packetIndex) {
+        return `packet-${animationContext.packetIndex}`;
+    }
+    const destination = fallbackDestination
+        ? makeNodeId(fallbackDestination)
+        : segment?.to
+            ? makeNodeId(segment.to)
+            : 'unknown';
+    const pathSignature = Array.isArray(animationContext?.path)
+        ? routePathSignature(animationContext.path)
+        : null;
+    if (pathSignature) {
+        return `${pathSignature}`;
+    }
+    return `pkt-${destination}`;
+}
+
+function derivePacketSummary(context, segment = null) {
+    if (context && typeof context === 'object' && context.packetSummary) {
+        return context.packetSummary;
+    }
+    const path = Array.isArray(context?.path) ? context.path : [];
+    const fallbackPath = Array.isArray(segment?.path) ? segment.path : [];
+    const resolvedPath = path.length ? path : fallbackPath;
+    let source = resolvedPath.length ? resolvedPath[0] : segment?.from || null;
+    let destination = resolvedPath.length
+        ? resolvedPath[resolvedPath.length - 1]
+        : segment?.to || null;
+    const data = context?.packet?.data ?? context?.packetData ?? context?.data ?? null;
+    if (!source && segment?.from) {
+        source = segment.from;
+    }
+    if (!destination && segment?.to) {
+        destination = segment.to;
+    }
+    if (!source && !destination && data == null) {
+        return null;
+    }
+    return {
+        source,
+        destination,
+        data,
+    };
+}
+
+function resolveBufferSnapshot(metaSnapshot, runtimeSnapshot) {
+    if (!metaSnapshot && !runtimeSnapshot) {
+        return {
+            used: 0,
+            capacity: 0,
+            head: null,
+            state: null,
+        };
+    }
+    const used = Number(runtimeSnapshot?.used ?? metaSnapshot?.used ?? 0) || 0;
+    const capacity = Number(runtimeSnapshot?.capacity ?? metaSnapshot?.capacity ?? 0) || 0;
+    const head = runtimeSnapshot?.head ?? metaSnapshot?.head ?? null;
+    const state = runtimeSnapshot?.state ?? metaSnapshot?.state ?? null;
+    return {
+        used,
+        capacity,
+        head,
+        state,
+    };
+}
+
+function describeBufferSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') {
+        return { primary: '—', secondary: null };
+    }
+    const used = Number(snapshot.used ?? 0);
+    const capacity = Number(snapshot.capacity ?? 0);
+    const primary = capacity
+        ? `${used} / ${capacity} slot${capacity === 1 ? '' : 's'}`
+        : `${used} slot${used === 1 ? '' : 's'}`;
+    const stateKey = snapshot.state || null;
+    const stateLabel = stateKey ? (BUFFER_STATE_LABELS[stateKey] || stateKey) : null;
+    const headText = snapshot.head
+        ? `Head: ${formatPacketSummary(snapshot.head)}`
+        : 'Head: empty';
+    const parts = [];
+    if (stateLabel) {
+        parts.push(`State: ${stateLabel}`);
+    }
+    parts.push(headText);
+    const secondary = parts.filter(Boolean).join(' · ');
+    return { primary, secondary };
+}
+
+function createMetricEntry(label, primary, secondary) {
+    const wrapper = document.createElement('div');
+    const dt = document.createElement('dt');
+    dt.textContent = label;
+    const dd = document.createElement('dd');
+    dd.textContent = primary || '—';
+    if (secondary) {
+        const span = document.createElement('span');
+        span.className = 'metric-secondary';
+        span.textContent = secondary;
+        dd.appendChild(document.createElement('br'));
+        dd.appendChild(span);
+    }
+    wrapper.appendChild(dt);
+    wrapper.appendChild(dd);
+    return wrapper;
+}
+
+function formatPacketSummary(packet) {
+    if (!packet || typeof packet !== 'object') {
+        return 'Empty';
+    }
+    const source = safeNodeLabel(packet.source || packet.source_address || {});
+    const destination = safeNodeLabel(packet.destination || packet.dest_address || {});
+    const data = typeof packet.data === 'string' && packet.data.length ? ` · ${packet.data}` : '';
+    return `${source} → ${destination}${data}`;
+}
+
+function createSignalChip(label, isHigh) {
+    const chip = document.createElement('span');
+    chip.className = 'signal-chip';
+    chip.dataset.state = isHigh ? 'high' : 'low';
+    chip.textContent = `${label}: ${isHigh ? 'High' : 'Low'}`;
+    return chip;
+}
+
+function createBitChip(label, state) {
+    const chip = document.createElement('span');
+    chip.className = 'bit-chip';
+    chip.dataset.state = state;
+    const labels = {
+        active: 'Active',
+        idle: 'Idle',
+        transfer: 'Transferring',
+        receiving: 'Receiving',
+    };
+    chip.textContent = `${label}: ${labels[state] || 'Idle'}`;
+    return chip;
+}
+
+function createRegisterRow(label, packet) {
+    const row = document.createElement('p');
+    row.textContent = `${label}: ${formatPacketSummary(packet)}`;
+    return row;
+}
+
+function renderNodeLogicSection(meta, runtime) {
+    if (!nodePanelLogic) return;
+    nodePanelLogic.innerHTML = '';
+
+    const logic = meta?.logic || {};
+    const routingCount = typeof logic.routing?.entryCount === 'number'
+        ? logic.routing.entryCount
+        : Array.isArray(meta?.routingTable)
+            ? meta.routingTable.length
+            : 0;
+    const runtimeInterfaces = runtime?.interfaces instanceof Map
+        ? Array.from(runtime.interfaces.values())
+        : [];
+    const totalInterfacesRaw = typeof logic.control?.totalInterfaces === 'number'
+        ? logic.control.totalInterfaces
+        : Array.isArray(meta?.interfaces)
+            ? meta.interfaces.length
+            : runtimeInterfaces.length;
+    const totalInterfaces = Number.isFinite(totalInterfacesRaw) ? totalInterfacesRaw : runtimeInterfaces.length;
+    const activeInterfaces = runtimeInterfaces.reduce((count, iface) => {
+        if (!iface) return count;
+        const bits = iface.statusBits || {};
+        return bits.busy || bits.transfer || bits.receive ? count + 1 : count;
+    }, 0);
+    const runtimeApp = Number(runtime?.applicationBuffer ?? 0);
+    const logicApp = Number(logic.application?.bufferedPackets ?? 0);
+    const metaApp = Number(meta?.applicationBuffer?.count ?? 0);
+    const bufferedPackets = Math.max(
+        Number.isFinite(runtimeApp) ? runtimeApp : 0,
+        Number.isFinite(logicApp) ? logicApp : 0,
+        Number.isFinite(metaApp) ? metaApp : 0,
+    );
+
+    const entries = [
+        {
+            label: 'Routing',
+            primary: logic.routing?.description
+                || `${routingCount} destination entries`,
+            secondary: `Entries: ${routingCount}`,
+        },
+        {
+            label: 'Application',
+            primary: bufferedPackets > 0
+                ? `${bufferedPackets} packet${bufferedPackets === 1 ? '' : 's'} staged`
+                : 'Application buffer empty',
+            secondary: `Buffered: ${bufferedPackets}`,
+        },
+        {
+            label: 'Control',
+            primary: activeInterfaces > 0
+                ? `${activeInterfaces} interface${activeInterfaces === 1 ? '' : 's'} active`
+                : 'All interfaces idle',
+            secondary: `Active: ${activeInterfaces} / ${totalInterfaces}`,
+        },
+    ];
+
+    entries.forEach((entry) => {
+        nodePanelLogic.appendChild(createMetricEntry(entry.label, entry.primary, entry.secondary));
+    });
+}
+
+function renderNodeInterfacesSection(meta, runtime) {
+    if (!nodePanelInterfaces) return;
+    nodePanelInterfaces.innerHTML = '';
+
+    const interfaces = Array.isArray(meta?.interfaces) ? meta.interfaces.slice() : [];
+    if (!interfaces.length) {
+        const empty = document.createElement('p');
+        empty.className = 'interface-empty';
+        empty.textContent = 'No connected interfaces.';
+        nodePanelInterfaces.appendChild(empty);
+        return;
+    }
+
+    const keyForInterface = (iface) => {
+        const neighbor = iface?.neighbor || {};
+        if (typeof neighbor.ring === 'number' && typeof neighbor.index === 'number') {
+            return `${neighbor.ring}-${neighbor.index}`;
+        }
+        return '0-0';
+    };
+
+    const runtimeInterfaces = runtime?.interfaces instanceof Map ? runtime.interfaces : null;
+    const interfaceEntries = interfaces.map((iface) => {
+        const neighborId = iface.neighbor ? makeNodeId(iface.neighbor) : null;
+        const runtimeOverlay = neighborId && runtimeInterfaces?.get(neighborId)
+            ? runtimeInterfaces.get(neighborId)
+            : null;
+        let activityScore = 0;
+        if (runtimeOverlay) {
+            const statusBits = runtimeOverlay.statusBits || {};
+            if (statusBits.busy) activityScore += 8;
+            if (statusBits.transfer) activityScore += 4;
+            if (statusBits.receive) activityScore += 4;
+            const sendUsed = Number(runtimeOverlay?.sendBuffer?.used || 0);
+            const recvUsed = Number(runtimeOverlay?.receiveBuffer?.used || 0);
+            if (sendUsed > 0) activityScore += 2;
+            if (recvUsed > 0) activityScore += 2;
+            const pins = runtimeOverlay.handshakePins || {};
+            if (pins.req || pins.ack || pins.data || pins.choke) {
+                activityScore += 1;
+            }
+        } else {
+            const statusBits = iface.statusBits || {};
+            if (statusBits.busy) activityScore += 4;
+            if (statusBits.transfer) activityScore += 2;
+            if (statusBits.receive) activityScore += 2;
+            const pins = iface.handshakePins || {};
+            if (pins.req || pins.ack || pins.data || pins.choke) {
+                activityScore += 1;
+            }
+        }
+        return {
+            iface,
+            runtimeOverlay,
+            neighborId,
+            key: keyForInterface(iface),
+            activityScore,
+        };
+    });
+
+    interfaceEntries
+        .sort((a, b) => {
+            if (b.activityScore !== a.activityScore) {
+                return b.activityScore - a.activityScore;
+            }
+            return a.key.localeCompare(b.key);
+        })
+        .forEach(({ iface, runtimeOverlay, neighborId }) => {
+            const card = document.createElement('article');
+            card.className = 'interface-card';
+
+            const header = document.createElement('div');
+            header.className = 'interface-card__header';
+            const title = document.createElement('h4');
+            title.textContent = `Interface to ${safeNodeLabel(iface.neighbor || {})}`;
+            const badge = document.createElement('span');
+            badge.className = 'interface-card__badge';
+            badge.dataset.variant = iface.linkType === 'ring' ? 'ring' : 'tree';
+            badge.textContent = iface.linkType === 'ring' ? 'Ring link' : 'Tree link';
+            header.appendChild(title);
+            header.appendChild(badge);
+            card.appendChild(header);
+
+            const sendSnapshot = resolveBufferSnapshot(iface.sendBuffer, runtimeOverlay?.sendBuffer);
+            const recvSnapshot = resolveBufferSnapshot(iface.receiveBuffer, runtimeOverlay?.receiveBuffer);
+            if (runtimeOverlay?.sendBuffer?.state) {
+                sendSnapshot.state = runtimeOverlay.sendBuffer.state;
+            }
+            if (runtimeOverlay?.receiveBuffer?.state) {
+                recvSnapshot.state = runtimeOverlay.receiveBuffer.state;
+            }
+            const activePacketsMap = runtimeOverlay?.activePackets instanceof Map
+                ? runtimeOverlay.activePackets
+                : null;
+
+            const metrics = document.createElement('dl');
+            metrics.className = 'interface-metrics';
+            const formattedSend = describeBufferSnapshot(sendSnapshot);
+            metrics.appendChild(createMetricEntry('Send buffer', formattedSend.primary, formattedSend.secondary));
+            const formattedRecv = describeBufferSnapshot(recvSnapshot);
+            metrics.appendChild(createMetricEntry('Receive buffer', formattedRecv.primary, formattedRecv.secondary));
+            if (activePacketsMap) {
+                const totalActive = activePacketsMap.size;
+                let outboundCount = 0;
+                let inboundCount = 0;
+                const stageCounts = new Map();
+                activePacketsMap.forEach((info) => {
+                    if (!info) return;
+                    if (info.direction === 'inbound') {
+                        inboundCount += 1;
+                    } else {
+                        outboundCount += 1;
+                    }
+                    if (typeof info.stage === 'string' && info.stage.length) {
+                        const stageKey = info.stage;
+                        stageCounts.set(stageKey, (stageCounts.get(stageKey) || 0) + 1);
+                    }
+                });
+                const activePrimary = totalActive
+                    ? `${totalActive} packet${totalActive === 1 ? '' : 's'} in flight`
+                    : 'No packets in flight';
+                const directionParts = [];
+                if (outboundCount) {
+                    directionParts.push(`${outboundCount} outbound`);
+                }
+                if (inboundCount) {
+                    directionParts.push(`${inboundCount} inbound`);
+                }
+                const stageParts = Array.from(stageCounts.entries())
+                    .sort((a, b) => (STAGE_PRIORITY[b[0]] || 0) - (STAGE_PRIORITY[a[0]] || 0))
+                    .map(([stageKey, count]) => `${count} ${stageKey}`);
+                const secondaryParts = [];
+                if (directionParts.length) {
+                    secondaryParts.push(directionParts.join(' · '));
+                }
+                if (stageParts.length) {
+                    secondaryParts.push(`Stages: ${stageParts.join(', ')}`);
+                }
+                const activeSecondary = secondaryParts.join(' · ');
+                metrics.appendChild(createMetricEntry('Active packets', activePrimary, activeSecondary || null));
+            }
+            const timeoutBase = runtimeOverlay?.timeout || iface.timeout || {};
+            const timeoutText = Number.isFinite(timeoutBase.value) && Number.isFinite(timeoutBase.limit)
+                ? `${timeoutBase.value} / ${timeoutBase.limit}`
+                : '—';
+            metrics.appendChild(createMetricEntry('Timeout', timeoutText));
+            card.appendChild(metrics);
+
+            const statusRow = document.createElement('div');
+            statusRow.className = 'interface-status-row';
+            const statusBits = {
+                ...iface.statusBits,
+                ...(runtimeOverlay?.statusBits || {}),
+            };
+            statusRow.appendChild(createBitChip('Busy', statusBits.busy ? 'active' : 'idle'));
+            statusRow.appendChild(createBitChip('Transfer', statusBits.transfer ? 'transfer' : 'idle'));
+            statusRow.appendChild(createBitChip('Receive', statusBits.receive ? 'receiving' : 'idle'));
+            card.appendChild(statusRow);
+
+            const signalRow = document.createElement('div');
+            signalRow.className = 'interface-signal-row';
+            const pins = {
+                ...iface.handshakePins,
+                ...(runtimeOverlay?.handshakePins || {}),
+            };
+            signalRow.appendChild(createSignalChip('REQ', Boolean(pins.req)));
+            signalRow.appendChild(createSignalChip('ACK', Boolean(pins.ack)));
+            signalRow.appendChild(createSignalChip('DATA', Boolean(pins.data)));
+            signalRow.appendChild(createSignalChip('CHOKE', Boolean(pins.choke)));
+            card.appendChild(signalRow);
+
+            const registers = document.createElement('div');
+            registers.className = 'interface-registers';
+            registers.appendChild(createRegisterRow('Send register', runtimeOverlay?.sendRegister || iface.sendRegister));
+            registers.appendChild(createRegisterRow('Receive register', runtimeOverlay?.receiveRegister || iface.receiveRegister));
+            registers.appendChild(createRegisterRow('Data line', runtimeOverlay?.dataLine || iface.dataLine));
+            card.appendChild(registers);
+
+            nodePanelInterfaces.appendChild(card);
+        });
+}
+
 function openNodePanel() {
     if (!nodePanel) return;
     nodePanel.classList.add('is-visible');
@@ -662,6 +1315,9 @@ function updateNodePanelContent() {
     const routingCount = Array.isArray(meta.routingTable) ? meta.routingTable.length : 0;
     nodePanelRoutes.textContent = routingCount ? `${routingCount}` : '0';
 
+    renderNodeLogicSection(meta, runtime);
+    renderNodeInterfacesSection(meta, runtime);
+
     if (nodePanelNeighbors) {
         nodePanelNeighbors.innerHTML = '';
         if (Array.isArray(meta.neighbors) && meta.neighbors.length) {
@@ -679,8 +1335,20 @@ function updateNodePanelContent() {
                     const recvCap = Number.isFinite(neighbor.receiveCapacity)
                         ? neighbor.receiveCapacity
                         : '–';
+                    const sendUsage = Number.isFinite(neighbor.sendUsage)
+                        ? neighbor.sendUsage
+                        : null;
+                    const recvUsage = Number.isFinite(neighbor.receiveUsage)
+                        ? neighbor.receiveUsage
+                        : null;
                     const typeLabel = neighbor.type === 'ring' ? 'RING' : 'TREE';
-                    type.textContent = `${typeLabel} · S:${sendCap} R:${recvCap}`;
+                    const sendDescriptor = sendUsage !== null && sendCap !== '–'
+                        ? `${sendUsage}/${sendCap}`
+                        : `${sendCap}`;
+                    const recvDescriptor = recvUsage !== null && recvCap !== '–'
+                        ? `${recvUsage}/${recvCap}`
+                        : `${recvCap}`;
+                    type.textContent = `${typeLabel} · S:${sendDescriptor} R:${recvDescriptor}`;
                     item.appendChild(label);
                     item.appendChild(type);
                     nodePanelNeighbors.appendChild(item);
@@ -697,15 +1365,67 @@ function updateNodePanelContent() {
         }
     }
 
-    updateBufferChip(nodePanelSendBuffer, runtime.sendBuffer);
-    updateBufferChip(nodePanelReceiveBuffer, runtime.receiveBuffer);
-    const appState = runtime.applicationBuffer > 0 ? 'ready' : 'idle';
+    const interfaces = Array.isArray(meta.interfaces) ? meta.interfaces : [];
+    const runtimeInterfaces = runtime?.interfaces instanceof Map ? runtime.interfaces : null;
+    const aggregateBuffers = (key) => interfaces.reduce((acc, iface) => {
+        if (!iface) return acc;
+        const neighborId = iface.neighbor ? makeNodeId(iface.neighbor) : null;
+        const runtimeOverlay = neighborId && runtimeInterfaces?.get(neighborId) ? runtimeInterfaces.get(neighborId) : null;
+        const snapshot = resolveBufferSnapshot(iface?.[key], runtimeOverlay?.[key]);
+        acc.used += Number(snapshot.used || 0);
+        acc.capacity += Number(snapshot.capacity || 0);
+        return acc;
+    }, { used: 0, capacity: 0 });
+
+    const sendTotals = aggregateBuffers('sendBuffer');
+    const recvTotals = aggregateBuffers('receiveBuffer');
+    const formatTotal = (totals) => {
+        const { used, capacity } = totals;
+        if (capacity > 0) {
+            return `${used} / ${capacity} slot${capacity === 1 ? '' : 's'}`;
+        }
+        return `${used} slot${used === 1 ? '' : 's'}`;
+    };
+
+    updateBufferChip(nodePanelSendBuffer, runtime.sendBuffer, formatTotal(sendTotals));
+    updateBufferChip(nodePanelReceiveBuffer, runtime.receiveBuffer, formatTotal(recvTotals));
+
+    const appBuffer = meta.applicationBuffer || {};
+    const appCount = Number(appBuffer.count || 0);
+    const runtimeAppCount = Number(runtime.applicationBuffer || 0);
+    const appState = appCount > 0 || runtimeAppCount > 0 ? 'ready' : 'idle';
+    const appDisplayCount = appCount > 0 ? appCount : runtimeAppCount;
     updateBufferChip(
         nodePanelAppBuffer,
         appState,
-        `${runtime.applicationBuffer} ${runtime.applicationBuffer === 1 ? 'packet' : 'packets'}`,
+        `${appDisplayCount} ${appDisplayCount === 1 ? 'packet' : 'packets'}`,
     );
-    updateBufferChip(nodePanelHandshake, runtime.handshake);
+
+    let assertedSignals = 0;
+    interfaces.forEach((iface) => {
+        if (!iface) return;
+        const neighborId = iface.neighbor ? makeNodeId(iface.neighbor) : null;
+        const runtimeOverlay = neighborId && runtimeInterfaces?.get(neighborId) ? runtimeInterfaces.get(neighborId) : null;
+        const pins = {
+            ...iface.handshakePins,
+            ...(runtimeOverlay?.handshakePins || {}),
+        };
+        assertedSignals += Number(Boolean(pins.req));
+        assertedSignals += Number(Boolean(pins.ack));
+        assertedSignals += Number(Boolean(pins.data));
+        assertedSignals += Number(Boolean(pins.choke));
+    });
+    const handshakeActiveState = runtime.handshake !== 'idle'
+        ? runtime.handshake
+        : assertedSignals > 0
+            ? 'primed'
+            : 'idle';
+    const handshakeText = runtime.handshake !== 'idle'
+        ? BUFFER_STATE_LABELS[runtime.handshake] || runtime.handshake
+        : assertedSignals > 0
+            ? `${assertedSignals} signal${assertedSignals === 1 ? '' : 's'} asserted`
+            : 'Idle';
+    updateBufferChip(nodePanelHandshake, handshakeActiveState, handshakeText);
 }
 
 function resetNodePanelContent() {
@@ -717,6 +1437,12 @@ function resetNodePanelContent() {
     nodePanelRoutes.textContent = '—';
     if (nodePanelNeighbors) {
         nodePanelNeighbors.innerHTML = '';
+    }
+    if (nodePanelLogic) {
+        nodePanelLogic.innerHTML = '';
+    }
+    if (nodePanelInterfaces) {
+        nodePanelInterfaces.innerHTML = '';
     }
     updateBufferChip(nodePanelSendBuffer, 'idle');
     updateBufferChip(nodePanelReceiveBuffer, 'idle');
@@ -764,7 +1490,7 @@ function handleCanvasNodeClick(nodeId) {
         const meta = nodeMeta.get(nodeId) || parseSelectValue(nodeId);
         const labelText = safeNodeLabel(meta);
         const mode = getSimulationMode();
-        if (mode === 'sequence' || mode === 'parallel') {
+        if (mode === 'parallel') {
             let applied = false;
             if (destinationCandidateSelect) {
                 applied = setSelectValue(destinationCandidateSelect, nodeId);
@@ -906,18 +1632,14 @@ function renderMultiRouteList() {
 
     const title = document.createElement('p');
     title.className = 'flow-entry__phase';
-    title.textContent = multiRunState.mode === 'sequence'
-        ? 'Sequence queue'
-        : 'Parallel routes';
+    title.textContent = 'Parallel routes';
     multiRouteList.appendChild(title);
 
     const fragment = document.createDocumentFragment();
-    const completedSet = multiRunState.completed || new Set();
-    const activeIndex = multiRunState.mode === 'sequence'
-        ? (typeof multiRunState.currentIndex === 'number'
-            ? multiRunState.currentIndex
-            : multiRunState.selectedIndex)
-        : multiRunState.selectedIndex;
+    const completedSet = multiRunState.completed instanceof Set ? multiRunState.completed : new Set();
+    const activeIndex = typeof multiRunState.selectedIndex === 'number'
+        ? multiRunState.selectedIndex
+        : 0;
 
     multiRunState.payloads.forEach((payload, index) => {
         const card = document.createElement('article');
@@ -942,13 +1664,7 @@ function renderMultiRouteList() {
 
         const status = document.createElement('p');
         status.className = 'flow-entry__phase';
-        if (isCompleted) {
-            status.textContent = 'Completed';
-        } else if (multiRunState.mode === 'sequence' && isActive) {
-            status.textContent = 'In progress';
-        } else {
-            status.textContent = 'Pending';
-        }
+        status.textContent = isCompleted ? 'Completed' : 'Pending';
         card.appendChild(status);
 
         const titleEl = document.createElement('h3');
@@ -956,11 +1672,16 @@ function renderMultiRouteList() {
         const pathArray = Array.isArray(payload.path) ? payload.path : [];
         const startNode = pathArray[0] || multiRunState.source || payload.source;
         const endNode = pathArray[pathArray.length - 1] || payload.destination || startNode;
-        titleEl.textContent = `Route ${index + 1}: ${safeNodeLabel(startNode)} → ${safeNodeLabel(endNode)}`;
+        const packetLabel = payload.packetIndex ? `Packet ${payload.packetIndex}` : `Packet ${index + 1}`;
+        titleEl.textContent = `${packetLabel}: ${safeNodeLabel(startNode)} → ${safeNodeLabel(endNode)}`;
         card.appendChild(titleEl);
 
         const details = document.createElement('ul');
         details.className = 'flow-entry__details';
+        const packetCountItem = document.createElement('li');
+        const packetCount = payload.packetCount || multiRunState.payloads.length;
+        packetCountItem.textContent = `${packetLabel} of ${packetCount}`;
+        details.appendChild(packetCountItem);
         const hopItem = document.createElement('li');
         hopItem.textContent = `Hop count: ${payload.hopCount ?? 0}`;
         details.appendChild(hopItem);
@@ -969,12 +1690,6 @@ function renderMultiRouteList() {
             const hintItem = document.createElement('li');
             hintItem.textContent = 'Click to preview';
             details.appendChild(hintItem);
-        }
-
-        if (multiRunState.mode === 'sequence' && isCompleted) {
-            const doneItem = document.createElement('li');
-            doneItem.textContent = 'Packet delivered';
-            details.appendChild(doneItem);
         }
 
         card.appendChild(details);
@@ -993,12 +1708,6 @@ function handleMultiRouteListClick(event) {
     if (Number.isNaN(index)) return;
     if (multiRunState.mode === 'parallel') {
         focusParallelRoute(index);
-        return;
-    }
-    if (multiRunState.mode === 'sequence') {
-        if (typeof multiRunState.currentIndex === 'number') return;
-        if (animationState) return;
-        previewSequentialRoute(index);
     }
 }
 
@@ -1011,13 +1720,87 @@ function handleMultiRouteListKeydown(event) {
     if (Number.isNaN(index)) return;
     if (multiRunState.mode === 'parallel') {
         focusParallelRoute(index);
-        return;
     }
-    if (multiRunState.mode === 'sequence') {
-        if (typeof multiRunState.currentIndex === 'number') return;
-        if (animationState) return;
-        previewSequentialRoute(index);
+}
+
+function ensureParallelCompletionSet() {
+    if (!multiRunState || multiRunState.mode !== 'parallel') {
+        return null;
     }
+    if (!(multiRunState.completed instanceof Set)) {
+        multiRunState.completed = new Set();
+    }
+    return multiRunState.completed;
+}
+
+function updateParallelRouteProgress(statuses = []) {
+    const completedSet = ensureParallelCompletionSet();
+    if (!completedSet) return;
+    let changed = false;
+
+    statuses.forEach((status, index) => {
+        if (!status) return;
+        const isCompleted = status.phaseKey === 'completed' || status.phaseLabel === 'Completed';
+        if (isCompleted && !completedSet.has(index)) {
+            completedSet.add(index);
+            changed = true;
+            if (!Array.isArray(multiRunState.completedRoutes)) {
+                multiRunState.completedRoutes = [];
+            }
+            const payload = Array.isArray(multiRunState.payloads)
+                ? multiRunState.payloads[index]
+                : null;
+            if (payload) {
+                multiRunState.completedRoutes[index] = new RoutePreview(payload, {
+                    renderStyle: 'completed',
+                    strokeOpacity: 0.95,
+                    lineWidth: 4,
+                });
+            }
+            if (Array.isArray(multiRunState.previewRoutes) && multiRunState.previewRoutes[index]) {
+                multiRunState.previewRoutes[index].renderStyle = 'completed';
+                multiRunState.previewRoutes[index].strokeOpacity = Math.max(
+                    multiRunState.previewRoutes[index].strokeOpacity || 0.85,
+                    0.85,
+                );
+            }
+        }
+    });
+
+    if (changed) {
+        renderMultiRouteList();
+    }
+}
+
+function buildCompletedStatusFromPayload(payload) {
+    const segments = Array.isArray(payload?.segments) ? payload.segments : [];
+    const path = Array.isArray(payload?.path) ? payload.path : [];
+    const totalHops = segments.length || Number(payload?.hopCount ?? 0) || 0;
+    const startNode = segments[0]?.from
+        || path[0]
+        || payload?.packet?.source
+        || payload?.source
+        || null;
+    const endNode = segments.length
+        ? segments[segments.length - 1]?.to
+        : path[path.length - 1]
+            || payload?.packet?.destination
+            || payload?.destination
+            || startNode;
+
+    return {
+        hopText: totalHops > 0 ? `${totalHops} / ${totalHops}` : '0 / 0',
+        nodesText: startNode && endNode
+            ? `${safeNodeLabel(startNode)} → ${safeNodeLabel(endNode)}`
+            : 'Route complete',
+        phaseKey: 'completed',
+        phaseLabel: 'Completed',
+        signalText: 'Idle',
+        signalStates: { req: 'sleep', ack: 'sleep', data: 'sleep' },
+        transferText: 'Packet delivered',
+        progressPercent: 100,
+        timer: 0,
+    };
 }
 
 function focusParallelRoute(index) {
@@ -1031,10 +1814,12 @@ function focusParallelRoute(index) {
     highlightMultiRouteCard(index);
 
     const payload = multiRunState.payloads[index];
+    const completedSet = ensureParallelCompletionSet();
     const previewEntry = Array.isArray(multiRunState.previewRoutes)
         ? multiRunState.previewRoutes[index]
         : null;
-    const previewColors = previewEntry
+    const isCompleted = Boolean(completedSet?.has(index) || previewEntry?.renderStyle === 'completed');
+    const previewColors = !isCompleted && previewEntry
         ? {
             treeColor: previewEntry.treeColor,
             ringColor: previewEntry.ringColor,
@@ -1043,10 +1828,15 @@ function focusParallelRoute(index) {
         }
         : null;
     prepareRoute(payload, {
-        contextLabel: `Parallel route ${index + 1} of ${multiRunState.payloads.length}`,
-        contextHint: 'Preview loaded. Click "Animate all" to start simultaneous transfer.',
+        contextLabel: `Packet ${payload.packetIndex || index + 1} of ${payload.packetCount || multiRunState.payloads.length}`,
+        contextHint: isCompleted
+            ? 'Packet delivered. Click "Animate all" to replay the batch.'
+            : 'Preview loaded. Click "Animate all" to start simultaneous transfer.',
         buttonLabel: 'Animate all',
         previewColors,
+        previewStyle: isCompleted ? 'completed' : 'active',
+        initialStatus: isCompleted ? buildCompletedStatusFromPayload(payload) : null,
+        isCompleted,
     });
 
     lastRoutePayload = payload;
@@ -1055,35 +1845,6 @@ function focusParallelRoute(index) {
         busy: false,
         label: 'Animate all',
     });
-}
-
-function previewSequentialRoute(index) {
-    if (!multiRunState || multiRunState.mode !== 'sequence') return;
-    if (animationState) return;
-    const { payloads } = multiRunState;
-    if (!Array.isArray(payloads) || !payloads.length) return;
-    if (index < 0 || index >= payloads.length) return;
-
-    multiRunState.selectedIndex = index;
-    renderMultiRouteList();
-    highlightMultiRouteCard(index);
-
-    const payload = payloads[index];
-    const isCompleted = multiRunState.completed instanceof Set && multiRunState.completed.has(index);
-    const hint = isCompleted
-        ? 'Route already delivered. Press "Animate sequence" to replay from start.'
-        : (payloads.length > 1
-            ? 'Routes ready. Press "Animate sequence" to begin sequential transfer.'
-            : 'Route ready. Press "Animate sequence" to begin.');
-
-    prepareRoute(payload, {
-        contextLabel: `Sequence route ${index + 1} of ${payloads.length}`,
-        contextHint: hint,
-        buttonLabel: 'Animate sequence',
-        previewStyle: isCompleted ? 'completed' : 'active',
-    });
-
-    lastRoutePayload = payload;
 }
 
 function formatRouteText(path) {
@@ -1184,6 +1945,104 @@ function updateAnimateButton({ disabled, busy = false, label } = {}) {
     animateBtn.textContent = busy ? 'Animating…' : currentLabel;
 }
 
+function hasRouteReadyForRestart() {
+    const parallelReady = Boolean(
+        multiRunState
+        && multiRunState.mode === 'parallel'
+        && Array.isArray(multiRunState.payloads)
+        && multiRunState.payloads.some((payload) => Array.isArray(payload?.segments) && payload.segments.length),
+    );
+    if (parallelReady) {
+        return true;
+    }
+    return Boolean(
+        lastRoutePayload
+        && Array.isArray(lastRoutePayload.segments)
+        && lastRoutePayload.segments.length,
+    );
+}
+
+function updateAnimationControlState() {
+    if (pauseAnimationBtn) {
+        const isRunning = Boolean(animationState);
+        const label = animationPaused ? 'Resume animation' : 'Pause animation';
+        pauseAnimationBtn.disabled = !isRunning;
+        pauseAnimationBtn.textContent = animationPaused ? '▶' : '⏸';
+        pauseAnimationBtn.title = label;
+        pauseAnimationBtn.setAttribute('aria-label', label);
+        pauseAnimationBtn.setAttribute('aria-pressed', animationPaused ? 'true' : 'false');
+    }
+    if (restartAnimationBtn) {
+        const routeReady = hasRouteReadyForRestart();
+        restartAnimationBtn.disabled = !routeReady;
+        restartAnimationBtn.title = routeReady ? 'Restart animation' : 'Restart animation (unavailable)';
+        restartAnimationBtn.setAttribute('aria-label', 'Restart animation');
+    }
+}
+
+function setAnimationPauseState(paused) {
+    if (!animationState) {
+        animationPaused = false;
+        animationPauseTimestamp = null;
+        updateAnimationControlState();
+        return;
+    }
+
+    if (paused) {
+        if (animationPaused) {
+            return;
+        }
+        animationPaused = true;
+        animationPauseTimestamp = performance.now();
+        if (animationFrame) {
+            cancelAnimationFrame(animationFrame);
+            animationFrame = null;
+        }
+        if (hudStatus) {
+            hudStatus.textContent = 'Animation paused';
+        }
+    } else {
+        if (!animationPaused) {
+            return;
+        }
+        const resumeTimestamp = performance.now();
+        const delta = animationPauseTimestamp ? resumeTimestamp - animationPauseTimestamp : 0;
+        animationPaused = false;
+        animationPauseTimestamp = null;
+        if (delta > 0 && animationState && typeof animationState.applyPauseOffset === 'function') {
+            animationState.applyPauseOffset(delta);
+        }
+        if (typeof animationStep === 'function') {
+            animationFrame = requestAnimationFrame(animationStep);
+        }
+        if (hudStatus) {
+            hudStatus.textContent = 'Animation resumed';
+        }
+    }
+    updateAnimationControlState();
+}
+
+function togglePauseAnimation() {
+    if (!animationState) {
+        return;
+    }
+    setAnimationPauseState(!animationPaused);
+}
+
+function restartAnimation() {
+    if (!hasRouteReadyForRestart()) {
+        if (hudStatus) {
+            hudStatus.textContent = 'Nothing to restart yet. Run a simulation first.';
+        }
+        return;
+    }
+    stopAnimation();
+    animationPaused = false;
+    animationPauseTimestamp = null;
+    playAnimation();
+    updateAnimationControlState();
+}
+
 function ingestTopologyPayload(data, { resetView = true } = {}) {
     topologyData = data;
     if (levelInput) {
@@ -1200,8 +2059,8 @@ function ingestTopologyPayload(data, { resetView = true } = {}) {
     }
 
     nodeRuntimeState.clear();
-    nodeMeta.forEach((_, nodeId) => {
-        nodeRuntimeState.set(nodeId, defaultNodeRuntimeState());
+    nodeMeta.forEach((meta, nodeId) => {
+        nodeRuntimeState.set(nodeId, defaultNodeRuntimeState(meta));
     });
 
     if (resetView) {
@@ -1231,6 +2090,7 @@ function ingestTopologyPayload(data, { resetView = true } = {}) {
     }
 
     updateAnimateButton({ disabled: true, busy: false });
+    updateAnimationControlState();
     populateNodeSelects();
     syncSelectionState();
     renderTopology();
@@ -1357,7 +2217,7 @@ function drawNodes(layout) {
     if (!topologyData) return;
     ctx.save();
     const mode = getSimulationMode();
-    const highlightMulti = mode === 'sequence' || mode === 'parallel';
+    const highlightMulti = mode === 'parallel';
     const multiDestinationSet = highlightMulti ? new Set(multiDestinations) : null;
     topologyData.nodes.forEach((node) => {
         const nodeId = makeNodeId(node);
@@ -1438,6 +2298,26 @@ function ringPoint(ring, startIndex, direction, progress, layout) {
     };
 }
 
+function progressToSpatial(progress) {
+    if (!Number.isFinite(progress)) {
+        return 0;
+    }
+    const dataRange = PHASE_RANGES.data;
+    if (progress <= dataRange[0]) {
+        return 0;
+    }
+    if (progress < dataRange[1]) {
+        const span = normalizeRange(progress, dataRange[0], dataRange[1]);
+        return clamp(span * 0.85, 0, 0.85);
+    }
+    const releaseRange = PHASE_RANGES.release;
+    if (progress <= releaseRange[0]) {
+        return 0.85;
+    }
+    const releaseSpan = normalizeRange(progress, releaseRange[0], releaseRange[1] || 1);
+    return clamp(0.85 + releaseSpan * 0.15, 0, 1);
+}
+
 function drawRoute(state, layout, options = {}) {
     if (!state || !Array.isArray(state.segments) || !state.segments.length) return;
     const {
@@ -1447,17 +2327,42 @@ function drawRoute(state, layout, options = {}) {
         ringColor = colors.ringHighlight,
         lineWidth = 4,
         strokeOpacity = 1,
+        directionHint = false,
+        suppressDirectionHintPhases = null,
+        activePhaseKey = null,
     } = options;
+
+    const animationComplete = typeof state.isComplete === 'function' && state.isComplete();
+    const previewComplete = state.renderStyle === 'completed' || options.forceCompleted === true;
+    const isCompletedRoute = animationComplete || previewComplete;
+    const activeTreeColor = isCompletedRoute ? colors.completedTree : treeColor;
+    const activeRingColor = isCompletedRoute ? colors.completedRing : ringColor;
+    const routeOpacity = isCompletedRoute ? Math.max(strokeOpacity, 0.9) : strokeOpacity;
+    const directionHintSuppressed = Boolean(
+        directionHint
+        && !isCompletedRoute
+        && suppressDirectionHintPhases
+        && activePhaseKey
+        && (
+            typeof suppressDirectionHintPhases.has === 'function'
+                ? suppressDirectionHintPhases.has(activePhaseKey)
+                : Array.isArray(suppressDirectionHintPhases)
+                    ? suppressDirectionHintPhases.includes(activePhaseKey)
+                    : false
+        ),
+    );
+    const allowDirectionHint = directionHint && !isCompletedRoute && !directionHintSuppressed;
 
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.lineWidth = lineWidth;
     const previousAlpha = ctx.globalAlpha;
-    ctx.globalAlpha = strokeOpacity;
+    ctx.globalAlpha = routeOpacity;
 
     state.segments.forEach((segment, idx) => {
-        const completion = state.segmentProgress(idx);
+        const progress = state.segmentProgress(idx);
+        const completion = progressToSpatial(progress);
         if (completion <= 0) return;
 
         const from = segment.from;
@@ -1473,19 +2378,26 @@ function drawRoute(state, layout, options = {}) {
             const startAngle = angleForNode(ring, from.index);
             const targetAngle = startAngle + directionStep * span * clamp(completion, 0, 1);
             ctx.beginPath();
-            ctx.strokeStyle = ringColor;
+            ctx.strokeStyle = activeRingColor;
             ctx.arc(center.x, center.y, radius, startAngle, targetAngle, directionStep < 0);
             ctx.stroke();
         } else {
             const startPos = getNodePosition(from.ring, from.index, layout);
             const endPos = getNodePosition(to.ring, to.index, layout);
             ctx.beginPath();
-            ctx.strokeStyle = treeColor;
+            ctx.strokeStyle = activeTreeColor;
             const midX = startPos.x + (endPos.x - startPos.x) * clamp(completion, 0, 1);
             const midY = startPos.y + (endPos.y - startPos.y) * clamp(completion, 0, 1);
             ctx.moveTo(startPos.x, startPos.y);
             ctx.lineTo(midX, midY);
             ctx.stroke();
+        }
+
+        if (allowDirectionHint && completion > 0.1) {
+            const arrowProgress = completion >= 1 ? 0.9 : Math.min(Math.max(completion, 0.2), 0.9);
+            const arrowPoint = segmentPointWithAngle(segment, arrowProgress, layout, { allowClamp: true });
+            const arrowColor = segment.type === 'ring' ? activeRingColor : activeTreeColor;
+            drawFlowArrow(arrowPoint, arrowPoint.angle, arrowColor, { size: 12 });
         }
     });
 
@@ -1540,28 +2452,25 @@ function segmentPointWithAngle(segment, progress, layout, { reverse = false, all
     return { x, y, angle };
 }
 
-function drawFlowArrow(point, angle, color, { length = 26, dashed = false } = {}) {
+function drawFlowArrow(point, angle, color, { size = 12, style = 'solid' } = {}) {
     ctx.save();
     ctx.translate(point.x, point.y);
     ctx.rotate(angle);
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round';
-    if (dashed) {
-        ctx.setLineDash([8, 6]);
-    }
-    ctx.beginPath();
-    ctx.moveTo(-length, 0);
-    ctx.lineTo(0, 0);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    const tipLength = size;
+    const halfBase = size * 0.55;
     ctx.beginPath();
     ctx.moveTo(0, 0);
-    ctx.lineTo(-12, 6.5);
-    ctx.lineTo(-12, -6.5);
+    ctx.lineTo(-tipLength, halfBase);
+    ctx.lineTo(-tipLength, -halfBase);
     ctx.closePath();
-    ctx.fillStyle = color;
-    ctx.fill();
+    if (style === 'outline') {
+        ctx.lineWidth = 2.4;
+        ctx.strokeStyle = color;
+        ctx.stroke();
+    } else {
+        ctx.fillStyle = color;
+        ctx.fill();
+    }
     ctx.restore();
 }
 
@@ -1596,13 +2505,13 @@ function drawPhaseIndicators(segment, progress, layout) {
     if (progress >= req[0] && progress < req[1]) {
         const t = normalizeRange(progress, req[0], req[1]);
         const point = segmentPointWithAngle(segment, t, layout, { allowClamp: true });
-        drawFlowArrow(point, point.angle, colors.phaseReq);
+        drawFlowArrow(point, point.angle, colors.phaseReq, { size: 10 });
     }
 
     if (progress >= ack[0] && progress < ack[1]) {
         const t = normalizeRange(progress, ack[0], ack[1]);
         const point = segmentPointWithAngle(segment, t, layout, { reverse: true, allowClamp: true });
-        drawFlowArrow(point, point.angle, colors.phaseAck, { dashed: true });
+        drawFlowArrow(point, point.angle, colors.phaseAck, { size: 10, style: 'outline' });
     }
 
     if (progress >= data[0] && progress < data[1]) {
@@ -1644,6 +2553,7 @@ function drawPreviewOverlay(preview, layout) {
         ringColor: drawOptions.ringColor,
         lineWidth: drawOptions.lineWidth,
         strokeOpacity: drawOptions.strokeOpacity,
+        directionHint: preview.renderStyle !== 'completed',
     });
 }
 
@@ -1671,7 +2581,12 @@ function indicatorInfoForProgress(segment, progress, layout) {
         case 'data':
             return {
                 stage,
-                point: samplePhasePoint('data'),
+                point: segmentPointWithAngle(
+                    segment,
+                    progressToSpatial(progress),
+                    layout,
+                    { allowClamp: true },
+                ),
                 radius: 10,
                 color,
             };
@@ -1685,7 +2600,12 @@ function indicatorInfoForProgress(segment, progress, layout) {
         default:
             return {
                 stage,
-                point: segmentPointWithAngle(segment, progress, layout, { allowClamp: true }),
+                point: segmentPointWithAngle(
+                    segment,
+                    progressToSpatial(progress),
+                    layout,
+                    { allowClamp: true },
+                ),
                 radius: 9,
                 color,
             };
@@ -1729,17 +2649,37 @@ function renderTopology() {
         if (animationState.mode === 'parallel' && Array.isArray(animationState.animations)) {
             animationState.animations.forEach((animation, index) => {
                 const color = PARALLEL_ROUTE_COLORS[index % PARALLEL_ROUTE_COLORS.length];
+                const selectedIndex = typeof multiRunState?.selectedIndex === 'number'
+                    ? multiRunState.selectedIndex
+                    : 0;
+                const status = Array.isArray(animationState.latestStatuses)
+                    ? animationState.latestStatuses[index]
+                    : null;
                 drawRoute(animation, layoutCache, {
                     showIndicator: true,
-                    showPhaseIndicators: index === 0,
+                    showPhaseIndicators: index === selectedIndex,
                     treeColor: color,
                     ringColor: color,
                     lineWidth: 3,
                     strokeOpacity: 0.85,
+                    directionHint: true,
+                    suppressDirectionHintPhases: HANDSHAKE_PHASES,
+                    activePhaseKey: status?.phaseKey || null,
                 });
             });
         } else {
-            drawRoute(animationState, layoutCache, { showIndicator: true, showPhaseIndicators: true });
+            const highlightStyle = PREVIEW_STYLE_DEFAULTS.active;
+            drawRoute(animationState, layoutCache, {
+                showIndicator: true,
+                showPhaseIndicators: true,
+                directionHint: true,
+                treeColor: highlightStyle.treeColor,
+                ringColor: highlightStyle.ringColor,
+                lineWidth: highlightStyle.lineWidth,
+                strokeOpacity: highlightStyle.strokeOpacity,
+                suppressDirectionHintPhases: HANDSHAKE_PHASES,
+                activePhaseKey: animationState.latestStatus?.phaseKey || null,
+            });
         }
     }
 }
@@ -1753,6 +2693,15 @@ class RouteAnimation {
         this.segments = payload.segments || [];
         this.flow = payload.flow || [];
         this.speed = speed;
+        this.packetIndex = payload?.packetIndex || 1;
+        this.packetCount = payload?.packetCount || 1;
+        this.lastStageKey = null;
+        const pathNodes = Array.isArray(this.path) ? this.path : [];
+        this.packetSummary = {
+            source: pathNodes.length ? pathNodes[0] : null,
+            destination: pathNodes.length ? pathNodes[pathNodes.length - 1] : null,
+            data: payload?.packet?.data ?? payload?.data ?? null,
+        };
         
         // Each segment has 5 phases with different durations
         // ready: 10%, req: 10%, ack: 10%, data: 50%, release: 20%
@@ -1768,6 +2717,7 @@ class RouteAnimation {
         this.startTimestamp = null;
         this.progress = 0;
         this.elapsedMs = 0;
+        this.latestStatus = null;
     }
 
     update(timestamp) {
@@ -1866,6 +2816,29 @@ class RouteAnimation {
         const segment = this.segments[rawIndex];
         const stage = stageFromProgress(segmentProgress);
         const hopNumber = Math.min(rawIndex + 1, totalHops);
+        const phaseChanged = this.lastStageKey !== stage.key;
+        this.lastStageKey = stage.key;
+
+        if (this.isComplete() && segmentProgress >= 1) {
+            this.lastStageKey = 'completed';
+            return {
+                hopText: `${totalHops} / ${totalHops}`,
+                nodesText: `${nodeLabel(segment.from)} → ${nodeLabel(segment.to)}`,
+                phaseKey: 'completed',
+                phaseLabel: 'Completed',
+                signalText: 'Idle',
+                signalStates: { req: 'sleep', ack: 'sleep', data: 'sleep' },
+                transferText: 'Packet delivered',
+                progressPercent: 100,
+                timer: Math.round(this.elapsedMs / 1000),
+                flowIndex: this.flow.length ? this.flow.length - 1 : hopNumber,
+                segment,
+                segmentProgress: 1,
+                packetIndex: this.packetIndex,
+                packetCount: this.packetCount,
+                phaseChanged,
+            };
+        }
         return {
             hopText: `${hopNumber} / ${totalHops}`,
             nodesText: `${nodeLabel(segment.from)} → ${nodeLabel(segment.to)}`,
@@ -1879,8 +2852,12 @@ class RouteAnimation {
             flowIndex: Math.min(hopNumber, this.flow.length - 1),
             segment,
             segmentProgress,
+            packetIndex: this.packetIndex,
+            packetCount: this.packetCount,
+            phaseChanged,
         };
     }
+
 }
 
 class ParallelRouteController {
@@ -1888,6 +2865,7 @@ class ParallelRouteController {
         this.mode = 'parallel';
         this.payloads = payloads;
         this.animations = payloads.map((payload) => new RouteAnimation(payload, speed));
+        this.latestStatuses = [];
     }
 
     update(timestamp) {
@@ -1899,6 +2877,7 @@ class ParallelRouteController {
     isComplete() {
         return this.animations.every((animation) => animation.isComplete());
     }
+
 }
 
 class RoutePreview {
@@ -1922,9 +2901,29 @@ class RoutePreview {
     }
 
     isComplete() {
-        return true;
+        return this.renderStyle === 'completed';
     }
 }
+
+RouteAnimation.prototype.applyPauseOffset = function applyPauseOffset(delta) {
+    if (!Number.isFinite(delta) || delta <= 0) {
+        return;
+    }
+    if (typeof this.startTimestamp === 'number') {
+        this.startTimestamp += delta;
+    }
+};
+
+ParallelRouteController.prototype.applyPauseOffset = function applyPauseOffset(delta) {
+    if (!Number.isFinite(delta) || delta <= 0) {
+        return;
+    }
+    this.animations.forEach((animation) => {
+        if (animation && typeof animation.applyPauseOffset === 'function') {
+            animation.applyPauseOffset(delta);
+        }
+    });
+};
 
 function stageFromProgress(progress) {
     if (progress < 0.2) {
@@ -1972,7 +2971,7 @@ function stageFromProgress(progress) {
     };
 }
 
-function aggregateParallelStatuses(statuses, { timerOverride } = {}) {
+function aggregateParallelStatuses(statuses, { timerOverride, forceComplete = false } = {}) {
     if (!Array.isArray(statuses) || !statuses.length) {
         return {
             hopText: '0 / 0',
@@ -1994,7 +2993,9 @@ function aggregateParallelStatuses(statuses, { timerOverride } = {}) {
 
     statuses.forEach((status) => {
         if (!status) return;
-        const isCompleted = status.phaseKey === 'completed' || status.phaseLabel === 'Completed';
+        const isCompleted = forceComplete
+            || status.phaseKey === 'completed'
+            || status.phaseLabel === 'Completed';
         if (isCompleted) {
             completed += 1;
         }
@@ -2002,29 +3003,35 @@ function aggregateParallelStatuses(statuses, { timerOverride } = {}) {
         maxTimer = Math.max(maxTimer, Number(status.timer ?? 0));
     });
 
-    const progressPercent = Math.round(progressSum / total);
-    const allComplete = completed === total;
+    if (forceComplete) {
+        completed = total;
+    }
+
+    const progressPercent = forceComplete
+        ? 100
+        : Math.round(progressSum / total);
+    const allComplete = forceComplete || completed === total;
     const timer = typeof timerOverride === 'number' ? timerOverride : Math.round(maxTimer);
+    const remaining = Math.max(total - completed, 0);
     return {
         hopText: `${completed} / ${total}`,
         nodesText: allComplete
             ? 'All packets delivered'
-            : `${total - completed} packet(s) still in flight`,
+            : `${remaining} packet${remaining === 1 ? '' : 's'} still in flight`,
         phaseKey: allComplete ? 'completed' : 'data',
         phaseLabel: allComplete ? 'Completed' : 'Parallel',
         signalText: allComplete ? 'Idle' : 'Parallel active',
         signalStates: allComplete
             ? { req: 'sleep', ack: 'sleep', data: 'sleep' }
             : { req: 'active', ack: 'active', data: 'active' },
-        transferText: allComplete ? 'Transfers complete' : 'Multiple packets transferring',
+        transferText: allComplete ? 'Packets delivered' : 'Multiple packets transferring',
         progressPercent,
         timer,
     };
 }
 
 function updateNodeRuntimeFromStatus(status, animationContext = animationState) {
-    if (!status) return;
-    if (!animationContext) return;
+    if (!status || !animationContext) return;
 
     let finalNode = null;
     if (Array.isArray(animationContext.path) && animationContext.path.length) {
@@ -2032,6 +3039,10 @@ function updateNodeRuntimeFromStatus(status, animationContext = animationState) 
     } else if (Array.isArray(animationContext.segments) && animationContext.segments.length) {
         finalNode = animationContext.segments[animationContext.segments.length - 1]?.to || null;
     }
+    const originNode = Array.isArray(animationContext.path) && animationContext.path.length
+        ? animationContext.path[0]
+        : null;
+    const originId = originNode ? makeNodeId(originNode) : null;
 
     if (!status.segment) {
         const isCompletedPhase = status.phaseKey === 'completed' || status.phaseLabel === 'Completed';
@@ -2058,11 +3069,30 @@ function updateNodeRuntimeFromStatus(status, animationContext = animationState) 
     sourceState.lastUpdated = timestamp;
     targetState.lastUpdated = timestamp;
 
+    const sourceInterface = ensureInterfaceRuntimeState(sourceId, segment.to);
+    const targetInterface = ensureInterfaceRuntimeState(targetId, segment.from);
+    const packetSummary = derivePacketSummary(animationContext, segment) || null;
+    const resolvedPacket = {
+        source: packetSummary?.source || segment.from || null,
+        destination: packetSummary?.destination || finalNode || segment.to || null,
+        data: packetSummary?.data ?? null,
+    };
+    const hasPacket = Boolean(resolvedPacket.source || resolvedPacket.destination || resolvedPacket.data != null);
+    const phaseChanged = Boolean(status.phaseChanged);
+
     const isFinalHop = Boolean(
         finalNode && segment.to.ring === finalNode.ring && segment.to.index === finalNode.index,
     );
 
-    const phaseKey = status.phaseKey || status.phaseLabel;
+    const phaseKeyRaw = status.phaseKey || status.phaseLabel;
+    const fallbackStage = Number.isFinite(status.segmentProgress)
+        ? stageFromProgress(status.segmentProgress).key
+        : null;
+    const phaseKey = (typeof phaseKeyRaw === 'string' && phaseKeyRaw.length)
+        ? phaseKeyRaw.toLowerCase()
+        : (typeof fallbackStage === 'string' ? fallbackStage : 'ready');
+
+    const packetKey = createPacketKey(status, animationContext, segment, finalNode);
 
     switch (phaseKey) {
         case 'ready':
@@ -2070,6 +3100,9 @@ function updateNodeRuntimeFromStatus(status, animationContext = animationState) 
             sourceState.handshake = 'primed';
             targetState.receiveBuffer = 'idle';
             targetState.handshake = 'idle';
+            if (phaseChanged && originId && sourceId === originId && sourceState.applicationBuffer > 0) {
+                sourceState.applicationBuffer = Math.max(0, sourceState.applicationBuffer - 1);
+            }
             break;
         case 'req':
             sourceState.sendBuffer = 'waiting';
@@ -2102,6 +3135,8 @@ function updateNodeRuntimeFromStatus(status, animationContext = animationState) 
             }
             break;
         case 'completed':
+            sourceState.sendBuffer = 'idle';
+            sourceState.handshake = 'idle';
             if (isFinalHop) {
                 targetState.receiveBuffer = 'delivered';
                 targetState.applicationBuffer = 1;
@@ -2110,6 +3145,54 @@ function updateNodeRuntimeFromStatus(status, animationContext = animationState) 
             break;
         default:
             break;
+    }
+
+    const shouldRemoveSource = phaseKey === 'completed'
+        || (phaseKey === 'release' && Number(status.segmentProgress ?? 0) >= 0.99)
+        || (!hasPacket && phaseKey === 'ready');
+    const shouldRemoveTarget = phaseKey === 'completed'
+        || (phaseKey === 'release' && Number(status.segmentProgress ?? 0) >= 0.99)
+        || (!hasPacket && phaseKey === 'ready' && !isFinalHop);
+
+    if (sourceInterface) {
+        recordInterfacePacketStage(sourceInterface, packetKey, {
+            direction: 'outbound',
+            stage: phaseKey,
+            packet: hasPacket ? resolvedPacket : null,
+            timestamp,
+            remove: shouldRemoveSource,
+        });
+        if (sourceInterface.timeout) {
+            sourceInterface.timeout.value = 0;
+        }
+    }
+
+    if (targetInterface) {
+        recordInterfacePacketStage(targetInterface, packetKey, {
+            direction: 'inbound',
+            stage: phaseKey,
+            packet: hasPacket ? resolvedPacket : null,
+            timestamp,
+            remove: !isFinalHop && shouldRemoveTarget,
+        });
+        if (targetInterface.timeout) {
+            targetInterface.timeout.value = 0;
+        }
+    }
+
+    if (
+        targetInterface
+        && isFinalHop
+        && phaseKey === 'release'
+        && Number(status.segmentProgress ?? 0) >= 0.99
+    ) {
+        recordInterfacePacketStage(targetInterface, packetKey, {
+            direction: 'inbound',
+            stage: 'completed',
+            packet: hasPacket ? resolvedPacket : null,
+            timestamp,
+            remove: true,
+        });
     }
 
     if (selectedNodeId === sourceId || selectedNodeId === targetId) {
@@ -2269,89 +3352,8 @@ async function simulateSingleRoute() {
         lastRoutePayload = null;
         renderTopology();
         updateAnimateButton({ disabled: true, busy: false, label: animateBtn.dataset.defaultLabel });
+        updateAnimationControlState();
     }
-}
-
-async function simulateSequentialRoutes() {
-    if (!topologyData) return;
-    setPickMode(null);
-    stopAnimation();
-    resetAllNodeRuntimeState();
-    resetMultiRunState();
-    syncSelectionState();
-    if (isMobileSidebar() && isSidebarVisible()) {
-        closeSidebar();
-    }
-
-    const source = parseSelectValue(sourceSelect.value);
-    const destinations = collectSelectedDestinations();
-    const sourceKey = `${source.ring}-${source.index}`;
-    const dedupe = new Map();
-    destinations.forEach((dest) => {
-        if (!dest || typeof dest.ring !== 'number' || typeof dest.index !== 'number') {
-            return;
-        }
-        const key = `${dest.ring}-${dest.index}`;
-        if (key === sourceKey) {
-            return;
-        }
-        if (!dedupe.has(key)) {
-            dedupe.set(key, dest);
-        }
-    });
-
-    const uniqueDestinations = Array.from(dedupe.values());
-    if (!uniqueDestinations.length) {
-        hudStatus.textContent = 'Add one or more destination nodes for 1 → n sequence.';
-        setStatusIdle('Awaiting destination selection');
-        updateAnimateButton({ disabled: true, busy: false, label: animateBtn.dataset.defaultLabel });
-        return;
-    }
-
-    hudStatus.textContent = `Computing ${uniqueDestinations.length} sequential route(s)…`;
-
-    const payloads = [];
-    for (let i = 0; i < uniqueDestinations.length; i += 1) {
-        const destination = uniqueDestinations[i];
-        try {
-            hudStatus.textContent = `Routing ${i + 1} / ${uniqueDestinations.length}…`;
-            const payload = await fetchRoutePayload(source, destination);
-            payloads.push(payload);
-        } catch (error) {
-            console.error(error);
-            const message = error.message || 'Routing failed';
-            hudStatus.textContent = message;
-            setStatusIdle(message);
-            updateAnimateButton({ disabled: true, busy: false, label: animateBtn.dataset.defaultLabel });
-            resetMultiRunState();
-            return;
-        }
-    }
-
-    if (!payloads.length) {
-        hudStatus.textContent = 'No valid routes generated.';
-        setStatusIdle('Awaiting destination selection');
-        updateAnimateButton({ disabled: true, busy: false, label: animateBtn.dataset.defaultLabel });
-        return;
-    }
-
-    multiRunState = {
-        mode: 'sequence',
-        payloads,
-        currentIndex: null,
-        selectedIndex: 0,
-        completed: new Set(),
-        completedRoutes: [],
-        previewRoutes: payloads.map((payload) => new RoutePreview(payload, {
-            renderStyle: 'pending',
-            strokeOpacity: 0.45,
-        })),
-        source,
-    };
-
-    summary.textContent = `Sequence routes: ${payloads.length} destination(s)`;
-    renderMultiRouteList();
-    previewSequentialRoute(0);
 }
 
 async function simulateParallelRoutes() {
@@ -2393,25 +3395,46 @@ async function simulateParallelRoutes() {
     hudStatus.textContent = `Computing ${uniqueDestinations.length} parallel route(s)…`;
 
     try {
-        const payloads = await Promise.all(
+        const rawPayloads = await Promise.all(
             uniqueDestinations.map((destination) => fetchRoutePayload(source, destination))
         );
 
-        if (!payloads.length) {
+        if (!rawPayloads.length) {
             hudStatus.textContent = 'No valid routes generated.';
             setStatusIdle('Awaiting destination selection');
             updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
             return;
         }
 
+        const packetCount = rawPayloads.length;
+        const enrichedPayloads = rawPayloads.map((payload, index) => {
+            const pathArray = Array.isArray(payload.path) ? payload.path : [];
+            const computedDestination = pathArray.length
+                ? pathArray[pathArray.length - 1]
+                : payload.destination || uniqueDestinations[index] || null;
+            const destinationAddress = computedDestination
+                ? { ring: computedDestination.ring, index: computedDestination.index }
+                : { ring: uniqueDestinations[index].ring, index: uniqueDestinations[index].index };
+            return {
+                ...payload,
+                packetIndex: index + 1,
+                packetCount,
+                packet: {
+                    source: { ring: source.ring, index: source.index },
+                    destination: destinationAddress,
+                    data: `Packet ${index + 1}`,
+                },
+            };
+        });
+
         multiRunState = {
             mode: 'parallel',
-            payloads,
+            payloads: enrichedPayloads,
             currentIndex: null,
             selectedIndex: 0,
             completed: new Set(),
             completedRoutes: [],
-            previewRoutes: payloads.map((payload, index) => {
+            previewRoutes: enrichedPayloads.map((payload, index) => {
                 const color = PARALLEL_ROUTE_COLORS[index % PARALLEL_ROUTE_COLORS.length];
                 return new RoutePreview(payload, {
                     renderStyle: 'pending',
@@ -2424,14 +3447,14 @@ async function simulateParallelRoutes() {
             source,
         };
 
-        summary.textContent = `Parallel routes: ${payloads.length} destination(s)`;
+        summary.textContent = `Parallel routes: ${packetCount} destination(s) · Packets: ${packetCount}`;
         renderMultiRouteList();
 
-        const flowEntries = payloads.map((payload, index) => {
+        const flowEntries = enrichedPayloads.map((payload, index) => {
             const pathArray = Array.isArray(payload.path) ? payload.path : [];
             const destination = pathArray[pathArray.length - 1] || payload.destination || source;
             return {
-                phase: `Route ${index + 1}`,
+                phase: `Packet ${index + 1}`,
                 title: `${safeNodeLabel(source)} → ${safeNodeLabel(destination)}`,
                 details: [
                     `Hop count: ${payload.hopCount ?? 0}`,
@@ -2441,7 +3464,7 @@ async function simulateParallelRoutes() {
         });
         renderFlow(flowEntries);
 
-        const firstPayload = payloads[0];
+        const firstPayload = enrichedPayloads[0];
         if (firstPayload) {
             const previewEntry = Array.isArray(multiRunState.previewRoutes)
                 ? multiRunState.previewRoutes[0]
@@ -2455,16 +3478,26 @@ async function simulateParallelRoutes() {
                 }
                 : null;
             prepareRoute(firstPayload, {
-                contextLabel: `Parallel route 1 of ${payloads.length}`,
+                contextLabel: `Packet 1 of ${packetCount}`,
                 previewColors,
                 buttonLabel: 'Animate all',
             });
             lastRoutePayload = firstPayload;
         }
 
-        hudStatus.textContent = `Parallel routes ready (${payloads.length}). Press "Animate all" or pick a route to inspect.`;
-        const hasSegments = payloads.some((payload) => Array.isArray(payload.segments) && payload.segments.length);
+        hudStatus.textContent = `Parallel routes ready (${packetCount}). Press "Animate all" or pick a route to inspect.`;
+        const hasSegments = enrichedPayloads.some((payload) => Array.isArray(payload.segments) && payload.segments.length);
         updateAnimateButton({ disabled: !hasSegments, busy: false, label: 'Animate all' });
+
+        const sourceNodeId = makeNodeId(source);
+        const sourceRuntime = ensureNodeRuntimeState(sourceNodeId);
+        sourceRuntime.applicationBuffer = packetCount;
+        sourceRuntime.handshake = packetCount > 0 ? 'primed' : 'idle';
+        sourceRuntime.sendBuffer = packetCount > 0 ? 'primed' : 'idle';
+        sourceRuntime.lastUpdated = performance.now();
+        if (selectedNodeId === sourceNodeId) {
+            updateNodePanelContent();
+        }
     } catch (error) {
         console.error(error);
         const message = error.message || 'Routing failed';
@@ -2472,86 +3505,27 @@ async function simulateParallelRoutes() {
         setStatusIdle(message);
         updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
         resetMultiRunState();
+        updateAnimationControlState();
     }
-}
-
-function runSequentialQueue(index) {
-    const defaultLabel = 'Animate sequence';
-
-    if (!multiRunState || multiRunState.mode !== 'sequence') {
-        updateAnimateButton({ disabled: false, busy: false, label: defaultLabel });
-        return;
-    }
-
-    const { payloads } = multiRunState;
-    if (!Array.isArray(payloads) || !payloads.length) {
-        hudStatus.textContent = 'No routes queued for sequential simulation.';
-        updateAnimateButton({ disabled: true, busy: false, label: defaultLabel });
-        return;
-    }
-
-    if (!Array.isArray(multiRunState.completedRoutes)) {
-        multiRunState.completedRoutes = [];
-    }
-
-    if (index >= payloads.length) {
-        multiRunState.currentIndex = null;
-        multiRunState.selectedIndex = null;
-        renderMultiRouteList();
-        hudStatus.textContent = 'Sequential simulation complete';
-        lastRoutePayload = payloads[payloads.length - 1];
-        updateAnimateButton({ disabled: false, busy: false, label: defaultLabel });
-        return;
-    }
-
-    multiRunState.currentIndex = index;
-    multiRunState.selectedIndex = index;
-    renderMultiRouteList();
-    highlightMultiRouteCard(index);
-
-    const payload = payloads[index];
-    hudStatus.textContent = `Animating route ${index + 1} of ${payloads.length}…`;
-    prepareRoute(payload, {
-        contextLabel: `Sequence ${index + 1} of ${payloads.length}`,
-        autoStart: true,
-    });
-
-    startAnimation(payload, {
-        onComplete: () => {
-            if (!multiRunState || multiRunState.mode !== 'sequence') {
-                updateAnimateButton({ disabled: false, busy: false, label: defaultLabel });
-                return;
-            }
-            if (Array.isArray(multiRunState.previewRoutes)) {
-                multiRunState.previewRoutes[index] = null;
-            }
-            multiRunState.completed.add(index);
-            if (!Array.isArray(multiRunState.completedRoutes)) {
-                multiRunState.completedRoutes = [];
-            }
-            const completedPreview = new RoutePreview(payload, { renderStyle: 'completed' });
-            multiRunState.completedRoutes.push(completedPreview);
-            routePreview = new RoutePreview(payload, { renderStyle: 'completed' });
-            renderTopology();
-            renderMultiRouteList();
-            runSequentialQueue(index + 1);
-        },
-        label: `Sequence ${index + 1}`,
-    });
 }
 
 function prepareRoute(payload, options = {}) {
     resetAllNodeRuntimeState();
     setNodePanelAutoTracking(autoNodeDetailsPreference);
     lastRoutePayload = payload;
-    const previewStyle = options.previewStyle || 'active';
-    const previewColors = options.previewColors || {};
+    const isCompleted = Boolean(options.isCompleted);
+    const initialStatus = options.initialStatus || null;
+    const previewColors = options.previewColors && typeof options.previewColors === 'object'
+        ? options.previewColors
+        : null;
+    const previewStyle = options.previewStyle
+        || (isCompleted ? 'completed' : (previewColors ? 'active' : 'pending'));
     routePreview = new RoutePreview(payload, {
         renderStyle: previewStyle,
-        treeColor: previewColors.treeColor,
-        ringColor: previewColors.ringColor,
-        lineWidth: previewColors.lineWidth,
-        strokeOpacity: previewColors.strokeOpacity,
+        treeColor: previewColors?.treeColor,
+        ringColor: previewColors?.ringColor,
+        lineWidth: previewColors?.lineWidth,
+        strokeOpacity: previewColors?.strokeOpacity,
     });
     animationState = null;
     setRouteInfo(payload);
@@ -2560,28 +3534,41 @@ function prepareRoute(payload, options = {}) {
     } else {
         summary.textContent = `Hop count: ${payload.hopCount}`;
     }
+    if (isCompleted) {
+        summary.textContent += ' · Completed';
+    }
     renderFlow(payload.flow);
     highlightFlowCard(0);
-    if (options.autoStart) {
-        updateAnimateButton({ disabled: true, busy: true, label: options.contextLabel || animateBtn?.dataset?.defaultLabel });
-    } else {
+    const hasSegments = Array.isArray(payload.segments) && payload.segments.length > 0;
+    const animateLabel = options.buttonLabel || options.contextLabel || animateBtn?.dataset?.defaultLabel;
+
+    if (initialStatus) {
+        updateStatusBar(initialStatus);
+    } else if (!options.autoStart) {
         const transferPrompt = options.buttonLabel
             ? `Press ${options.buttonLabel}`
             : 'Press Animate';
         showRouteReadyStatus(payload, { transferText: transferPrompt });
     }
-    const hasSegments = Array.isArray(payload.segments) && payload.segments.length > 0;
-    if (!options.autoStart) {
+
+    if (options.autoStart) {
+        updateAnimateButton({ disabled: true, busy: true, label: options.contextLabel || animateBtn?.dataset?.defaultLabel });
+    } else {
         updateAnimateButton({
             disabled: !hasSegments,
             busy: false,
-            label: options.buttonLabel || options.contextLabel || animateBtn?.dataset?.defaultLabel,
+            label: animateLabel,
         });
-        if (hasSegments) {
-            hudStatus.textContent = options.contextHint
-                || 'Route ready. Click "Animate path" to begin.';
-        } else {
-            hudStatus.textContent = 'Source and destination are identical.';
+        if (hudStatus) {
+            if (options.contextHint) {
+                hudStatus.textContent = options.contextHint;
+            } else if (initialStatus) {
+                hudStatus.textContent = 'Packet delivered. Click "Animate all" to replay.';
+            } else if (hasSegments) {
+                hudStatus.textContent = 'Route ready. Click "Animate path" to begin.';
+            } else {
+                hudStatus.textContent = 'Source and destination are identical.';
+            }
         }
     }
     if (Array.isArray(payload.path) && payload.path.length) {
@@ -2591,6 +3578,7 @@ function prepareRoute(payload, options = {}) {
         });
     }
     renderTopology();
+    updateAnimationControlState();
 }
 
 function playAnimation() {
@@ -2607,58 +3595,6 @@ function playAnimation() {
                     hudStatus.textContent = 'Parallel transmissions complete';
                 },
             });
-            return;
-        }
-
-        if (multiRunState.mode === 'sequence') {
-            if (animationState) {
-                return;
-            }
-
-            const payloads = Array.isArray(multiRunState.payloads) ? multiRunState.payloads : [];
-            if (!payloads.length) {
-                hudStatus.textContent = 'Add destinations before animating.';
-                return;
-            }
-
-            if (!(multiRunState.completed instanceof Set)) {
-                multiRunState.completed = new Set();
-            }
-
-            const total = payloads.length;
-            const completedSet = multiRunState.completed;
-            let startIndex = 0;
-
-            if (completedSet.size && completedSet.size < total) {
-                for (let i = 0; i < total; i += 1) {
-                    if (!completedSet.has(i)) {
-                        startIndex = i;
-                        break;
-                    }
-                }
-            } else if (completedSet.size === total) {
-                multiRunState.completed = new Set();
-                multiRunState.completedRoutes = [];
-                if (Array.isArray(multiRunState.payloads)) {
-                    multiRunState.previewRoutes = multiRunState.payloads.map((payload) => new RoutePreview(payload, {
-                        renderStyle: 'pending',
-                        strokeOpacity: 0.45,
-                    }));
-                }
-                routePreview = null;
-                renderTopology();
-                renderMultiRouteList();
-                startIndex = 0;
-            } else if (typeof multiRunState.selectedIndex === 'number') {
-                startIndex = multiRunState.selectedIndex;
-            }
-
-            if (!Array.isArray(multiRunState.completedRoutes)) {
-                multiRunState.completedRoutes = [];
-            }
-
-            multiRunState.selectedIndex = startIndex;
-            runSequentialQueue(startIndex);
             return;
         }
     }
@@ -2683,9 +3619,11 @@ function startAnimation(payload, options = {}) {
 
     if (!payload || !Array.isArray(payload.segments) || !payload.segments.length) {
         updateAnimateButton({ disabled: true, busy: false, label: disableLabel });
+        updateAnimationControlState();
         return;
     }
     cancelAnimationFrame(animationFrame);
+    animationFrame = null;
     resetAllNodeRuntimeState();
     routePreview = null;
     if (Array.isArray(opts.parallelPayloads) && opts.parallelPayloads.length) {
@@ -2694,6 +3632,8 @@ function startAnimation(payload, options = {}) {
         animationState = new RouteAnimation(payload, speedMultiplier);
     }
     animationOptions = opts;
+    animationPaused = false;
+    animationPauseTimestamp = null;
     setNodePanelAutoTracking(autoNodeDetailsPreference);
     updateAnimateButton({ disabled: true, busy: true, label: disableLabel });
     hudStatus.textContent = opts.parallelPayloads ? 'Animating parallel routes…' : 'Animating route…';
@@ -2718,11 +3658,14 @@ function startAnimation(payload, options = {}) {
 
         if (animationState.mode === 'parallel' && Array.isArray(animationState.animations)) {
             const statuses = animationState.animations.map((animation) => animation.currentStatus());
+            animationState.latestStatuses = statuses;
             const aggregate = aggregateParallelStatuses(statuses);
             updateStatusBar(aggregate);
             statuses.forEach((status, index) => updateNodeRuntimeFromStatus(status, animationState.animations[index]));
+            updateParallelRouteProgress(statuses);
         } else {
             const status = animationState.currentStatus();
+            animationState.latestStatus = status;
             updateStatusBar(status);
             if (status && typeof status.flowIndex === 'number') {
                 highlightFlowCard(status.flowIndex);
@@ -2767,7 +3710,7 @@ function startAnimation(payload, options = {}) {
             };
             updateStatusBar(completedStatus);
             if (Array.isArray(opts.parallelPayloads) && opts.parallelPayloads.length) {
-                opts.parallelPayloads.forEach((payloadItem) => {
+                opts.parallelPayloads.forEach((payloadItem, index) => {
                     const finalSegment = Array.isArray(payloadItem.segments) && payloadItem.segments.length
                         ? payloadItem.segments[payloadItem.segments.length - 1]
                         : null;
@@ -2777,7 +3720,10 @@ function startAnimation(payload, options = {}) {
                         phaseKey: 'completed',
                         phaseLabel: 'Completed',
                     };
-                    updateNodeRuntimeFromStatus(status, payloadItem);
+                    const context = Array.isArray(animationState?.animations)
+                        ? animationState.animations[index]
+                        : payloadItem;
+                    updateNodeRuntimeFromStatus(status, context);
                 });
             } else {
                 updateNodeRuntimeFromStatus(completedStatus, animationState);
@@ -2828,13 +3774,18 @@ function startAnimation(payload, options = {}) {
             if (onComplete) {
                 onComplete();
             }
+            animationPaused = false;
+            animationPauseTimestamp = null;
+            animationStep = null;
+            updateAnimationControlState();
             return;
         }
 
         animationFrame = requestAnimationFrame(step);
     }
-
-    animationFrame = requestAnimationFrame(step);
+    animationStep = step;
+    animationFrame = requestAnimationFrame(animationStep);
+    updateAnimationControlState();
 }
 
 function stopAnimation() {
@@ -2843,6 +3794,11 @@ function stopAnimation() {
         animationFrame = null;
     }
     animationState = null;
+    animationOptions = null;
+    animationStep = null;
+    animationPaused = false;
+    animationPauseTimestamp = null;
+    updateAnimationControlState();
 }
 
 function resetSimulation() {
@@ -2864,6 +3820,7 @@ function resetSimulation() {
         resetNodePanelContent();
     }
     renderTopology();
+    updateAnimationControlState();
 }
 
 function applyZoom(factor, originX, originY) {
@@ -3007,9 +3964,6 @@ if (simulateBtn) {
     simulateBtn.addEventListener('click', () => {
         const mode = simulationModeSelect ? simulationModeSelect.value : 'single';
         switch (mode) {
-            case 'sequence':
-                simulateSequentialRoutes();
-                break;
             case 'parallel':
                 simulateParallelRoutes();
                 break;
@@ -3147,6 +4101,14 @@ if (cursorModeBtn) {
     cursorModeBtn.classList.toggle('is-active', scrollZoomEnabled);
 }
 
+if (pauseAnimationBtn) {
+    pauseAnimationBtn.addEventListener('click', togglePauseAnimation);
+}
+
+if (restartAnimationBtn) {
+    restartAnimationBtn.addEventListener('click', restartAnimation);
+}
+
 if (autoNodeDetailsBtn) {
     autoNodeDetailsBtn.addEventListener('click', () => {
         const isPaused = autoNodeDetailsPreference && !nodePanelAutoTracking;
@@ -3190,13 +4152,13 @@ renderMultiDestinationList();
 
 function applySimulationModeUI(mode) {
     const normalizedMode = mode || (simulationModeSelect ? simulationModeSelect.value : 'single');
-    const isMulti = normalizedMode === 'sequence' || normalizedMode === 'parallel';
-    setElementVisibility(singleDestinationField, !isMulti);
-    setElementVisibility(multiDestinationField, isMulti);
+    const isParallel = normalizedMode === 'parallel';
+    setElementVisibility(singleDestinationField, !isParallel);
+    setElementVisibility(multiDestinationField, isParallel);
     if (multiRouteList) {
-        multiRouteList.style.display = normalizedMode === 'single' ? 'none' : multiRouteList.style.display;
+        multiRouteList.style.display = isParallel ? multiRouteList.style.display : 'none';
     }
-    if (isMulti) {
+    if (isParallel) {
         currentDestinationId = null;
         if (destinationCandidateSelect) {
             let fallback = destinationSelect?.value || destinationCandidateSelect.value;
@@ -3211,7 +4173,7 @@ function applySimulationModeUI(mode) {
     } else {
         syncSelectionState();
     }
-    if (normalizedMode === 'parallel') {
+    if (isParallel) {
         updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
     } else {
         updateAnimateButton({ disabled: true, busy: false, label: animateBtn?.dataset?.defaultLabel });
@@ -3230,8 +4192,6 @@ if (simulationModeSelect) {
         summary.textContent = '';
         if (simulationModeSelect.value === 'parallel') {
             hudStatus.textContent = 'Parallel mode selected. Choose multiple destinations to animate together.';
-        } else if (simulationModeSelect.value === 'sequence') {
-            hudStatus.textContent = 'Sequence mode selected. Destinations will animate one after another.';
         } else {
             hudStatus.textContent = '1 → 1 mode selected. Pick single destination to simulate.';
         }
@@ -3247,6 +4207,7 @@ applySignalState({ req: 'sleep', ack: 'sleep', data: 'sleep' });
 syncSidebarForViewport();
 syncNodePanelMode();
 updateAnimateButton({ disabled: true, busy: false });
+updateAnimationControlState();
 
 fetchTopology()
     .then(() => {
