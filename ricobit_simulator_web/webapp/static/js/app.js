@@ -75,23 +75,23 @@ const signalChips = {
 
 const colors = {
     tree: 'rgba(104, 104, 103, 0.23)',
-    treeHighlight: 'rgba(0, 0, 0, 1)',
-    ringHighlight: 'rgba(0, 0, 0, 0.88)',
-    previewTree: 'rgba(255, 145, 0, 1)',
+    treeHighlight: '#2c2c2ce4',
+    ringHighlight:  '#2c2c2ce4',
+    previewTree: 'rgba(255, 157, 0, 1)',
     previewRing: 'rgba(255, 145, 0, 1)',
-    node: '#0148c2e5',
+    node: '#016271ff',
     nodeHighlight: '#000000ff',
     nodeSelected: '#f97316',
     sourceNode: '#16a34a',
     destinationNode: '#b80000ff',
-    sharedNode: '#0ea5e9',
+    sharedNode: '#01dfb7ea',
     phaseReq: '#cc6403ff',
-    phaseAck: '#0148c2e5',
+    phaseAck: '#013b9fe5',
     phaseData: '#22c55e',
-    phaseRelease: '#0ea5e9',
+    phaseRelease: '#0271a4ff',
     text: '#454545ae',
-    completedTree: '#16a34a',
-    completedRing: '#16a34a',
+    completedTree: '#70ed03e1',
+    completedRing: '#70ed03e1',
 };
 
 const PREVIEW_STYLE_DEFAULTS = {
@@ -124,6 +124,8 @@ const PREVIEW_STYLE_DEFAULTS = {
 const PARALLEL_ROUTE_COLORS = ['#ff6a00ff', '#00aeffff', '#8400ffff', '#f60303ff', '#05faddff'];
 const HANDSHAKE_PHASES = new Set(['req', 'ack']);
 const HANDSHAKE_WITH_DATA_PHASES = new Set(['req', 'ack', 'data']);
+const DEFAULT_SPEED_SLIDER = 0.6;
+const SPEED_SCALE = 0.6;
 
 const STAGE_INDICATOR_COLORS = {
     ready: colors.nodeSelected,
@@ -132,6 +134,15 @@ const STAGE_INDICATOR_COLORS = {
     data: colors.phaseData,
     release: colors.phaseRelease,
 };
+
+function resolveSpeedSliderValue(rawValue, fallback = DEFAULT_SPEED_SLIDER) {
+    const numeric = parseFloat(rawValue);
+    return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function computeSpeedMultiplier(rawValue) {
+    return resolveSpeedSliderValue(rawValue) * SPEED_SCALE;
+}
 
 const viewState = {
     zoom: 1,
@@ -157,7 +168,7 @@ let animationFrame = null;
 let animationStep = null;
 let flowCardElements = [];
 let currentRouteInfo = null;
-let speedMultiplier = parseFloat(speedControl.value) || 0.6;
+let speedMultiplier = computeSpeedMultiplier(speedControl ? speedControl.value : DEFAULT_SPEED_SLIDER);
 const nodeMeta = new Map();
 const nodeRuntimeState = new Map();
 const nodePositions = new Map();
@@ -1474,6 +1485,10 @@ function selectNode(nodeId) {
 
 function handleCanvasNodeClick(nodeId) {
     if (!nodeId) return;
+    if (!pickMode && selectedNodeId === nodeId) {
+        closeNodePanel();
+        return;
+    }
     if (pickMode === 'source') {
         const meta = nodeMeta.get(nodeId) || parseSelectValue(nodeId);
         if (setSelectValue(sourceSelect, nodeId)) {
@@ -1748,6 +1763,15 @@ function updateParallelRouteProgress(statuses = []) {
             if (!Array.isArray(multiRunState.completedRoutes)) {
                 multiRunState.completedRoutes = [];
             }
+            if (!Array.isArray(multiRunState.completedStatuses)) {
+                multiRunState.completedStatuses = [];
+            }
+            multiRunState.completedStatuses[index] = {
+                ...status,
+                signalStates: {
+                    ...(status.signalStates || {}),
+                },
+            };
             const payload = Array.isArray(multiRunState.payloads)
                 ? multiRunState.payloads[index]
                 : null;
@@ -1820,6 +1844,9 @@ function focusParallelRoute(index) {
         ? multiRunState.previewRoutes[index]
         : null;
     const isCompleted = Boolean(completedSet?.has(index) || previewEntry?.renderStyle === 'completed');
+    const storedStatus = Array.isArray(multiRunState.completedStatuses)
+        ? multiRunState.completedStatuses[index]
+        : null;
     const previewColors = !isCompleted && previewEntry
         ? {
             treeColor: previewEntry.treeColor,
@@ -1828,6 +1855,16 @@ function focusParallelRoute(index) {
             lineWidth: 4,
         }
         : null;
+    const initialStatus = isCompleted
+        ? storedStatus
+            ? {
+                ...storedStatus,
+                signalStates: {
+                    ...(storedStatus.signalStates || {}),
+                },
+            }
+            : buildCompletedStatusFromPayload(payload)
+        : null;
     prepareRoute(payload, {
         contextLabel: `Packet ${payload.packetIndex || index + 1} of ${payload.packetCount || multiRunState.payloads.length}`,
         contextHint: isCompleted
@@ -1835,8 +1872,8 @@ function focusParallelRoute(index) {
             : 'Preview loaded. Click "Animate all" to start simultaneous transfer.',
         buttonLabel: 'Animate all',
         previewColors,
+        initialStatus,
         previewStyle: isCompleted ? 'completed' : 'active',
-        initialStatus: isCompleted ? buildCompletedStatusFromPayload(payload) : null,
         isCompleted,
     });
 
@@ -2362,6 +2399,11 @@ function drawRoute(state, layout, options = {}) {
     const previousAlpha = ctx.globalAlpha;
     ctx.globalAlpha = routeOpacity;
 
+    const currentInfoSnapshot = typeof state.currentSegment === 'function'
+        ? state.currentSegment()
+        : null;
+    const currentIndex = currentInfoSnapshot ? currentInfoSnapshot.index : null;
+    let currentArrowSample = null;
     state.segments.forEach((segment, idx) => {
         const progress = state.segmentProgress(idx);
         const completion = progressToSpatial(progress);
@@ -2396,20 +2438,27 @@ function drawRoute(state, layout, options = {}) {
         }
 
         if (allowDirectionHint && completion > 0.1) {
-            const arrowLead = 0;
-            const arrowProgress = Math.min(Math.max(completion + arrowLead, 0.2), 0.97);
+            const baseProgress = completion;
+            const arrowProgress = Math.min(Math.max(baseProgress, 0.2), 0.95);
             const arrowPoint = segmentPointWithAngle(segment, arrowProgress, layout, { allowClamp: true });
             const arrowColor = segment.type === 'ring' ? activeRingColor : activeTreeColor;
             drawFlowArrow(arrowPoint, arrowPoint.angle, arrowColor, { size: 12 });
+            if (currentIndex === idx) {
+                currentArrowSample = arrowPoint;
+            }
         }
     });
 
     ctx.globalAlpha = previousAlpha;
-    const current = state.currentSegment();
+    const current = currentInfoSnapshot;
     if (current) {
         const { segment, progress } = current;
         if (showPhaseIndicators) {
-            drawPhaseIndicators(segment, progress, layout, phaseIndicatorStages);
+            const phaseOverrides = {
+                dataPoint: currentArrowSample,
+                allowFallback: Boolean(currentArrowSample),
+            };
+            drawPhaseIndicators(segment, progress, layout, phaseIndicatorStages, phaseOverrides);
         }
 
         if (showIndicator) {
@@ -2442,7 +2491,7 @@ function segmentPointWithAngle(segment, progress, layout, { reverse = false, all
         const theta = ringAngleAt(ring, startIndex, direction, clampedProgress);
         const point = ringPoint(ring, startIndex, direction, clampedProgress, layout);
         const tangent = theta + (direction >= 0 ? Math.PI / 2 : -Math.PI / 2);
-        return { ...point, angle: tangent };
+        return { ...point, angle: tangent };        const alignedProgress = Math.min(Math.max(spatialProgress, 0.2), 0.95);
     }
 
     const fromNode = reverse ? segment.to : segment.from;
@@ -2481,6 +2530,8 @@ function drawDataMarker(point, angle, color) {
     ctx.save();
     ctx.translate(point.x, point.y);
     ctx.rotate(angle);
+    // Offset slightly along the arrow direction so the circle sits at the tip.
+    ctx.translate(4, 0);
     ctx.fillStyle = color;
     ctx.beginPath();
     ctx.arc(0, 0, 7, 0, Math.PI * 2);
@@ -2499,7 +2550,7 @@ function drawReleasePulse(point, color) {
     ctx.restore();
 }
 
-function drawPhaseIndicators(segment, progress, layout, stageFilter = null) {
+function drawPhaseIndicators(segment, progress, layout, stageFilter = null, overrides = null) {
     const { req, ack, data, release } = PHASE_RANGES;
     const allowStage = (stageKey) => {
         if (!stageFilter) return true;
@@ -2515,6 +2566,11 @@ function drawPhaseIndicators(segment, progress, layout, stageFilter = null) {
         return stageKey === stageFilter;
     };
 
+    const dataPointOverride = overrides && typeof overrides === 'object' ? overrides.dataPoint || null : null;
+    const allowDataFallback = overrides && typeof overrides === 'object'
+        ? Boolean(overrides.allowFallback)
+        : true;
+
     if (allowStage('req') && progress >= req[0] && progress < req[1]) {
         const t = normalizeRange(progress, req[0], req[1]);
         const point = segmentPointWithAngle(segment, t, layout, { allowClamp: true });
@@ -2528,9 +2584,19 @@ function drawPhaseIndicators(segment, progress, layout, stageFilter = null) {
     }
 
     if (allowStage('data') && progress >= data[0] && progress < data[1]) {
-        const t = normalizeRange(progress, data[0], data[1]);
-        const point = segmentPointWithAngle(segment, t, layout);
-        drawDataMarker(point, point.angle, colors.phaseData);
+        let point = dataPointOverride;
+        if (!point) {
+            if (!allowDataFallback) {
+                point = null;
+            } else {
+                const spatialProgress = progressToSpatial(progress);
+                const alignedProgress = Math.min(Math.max(spatialProgress, 0.2), 0.95);
+                point = segmentPointWithAngle(segment, alignedProgress, layout, { allowClamp: true });
+            }
+        }
+        if (point) {
+            drawDataMarker(point, point.angle, colors.phaseData);
+        }
     }
 
     if (allowStage('release') && progress >= release[0]) {
@@ -2681,7 +2747,7 @@ function renderTopology() {
         } else {
             const highlightStyle = PREVIEW_STYLE_DEFAULTS.active;
             drawRoute(animationState, layoutCache, {
-                showIndicator: true,
+                showIndicator: false,
                 showPhaseIndicators: true,
                 directionHint: true,
                 treeColor: highlightStyle.treeColor,
@@ -3445,6 +3511,7 @@ async function simulateParallelRoutes() {
             selectedIndex: 0,
             completed: new Set(),
             completedRoutes: [],
+            completedStatuses: [],
             previewRoutes: enrichedPayloads.map((payload, index) => {
                 const color = PARALLEL_ROUTE_COLORS[index % PARALLEL_ROUTE_COLORS.length];
                 return new RoutePreview(payload, {
@@ -3922,10 +3989,13 @@ canvas.addEventListener(
     { passive: false },
 );
 
-speedControl.addEventListener('input', (event) => {
-    speedMultiplier = parseFloat(event.target.value) || 0.6;
-    hudStatus.textContent = `Animation speed ×${speedMultiplier.toFixed(1)}`;
-});
+if (speedControl) {
+    speedControl.addEventListener('input', (event) => {
+        const sliderValue = resolveSpeedSliderValue(event.target.value);
+        speedMultiplier = sliderValue * SPEED_SCALE;
+        hudStatus.textContent = `Animation speed ×${speedMultiplier.toFixed(1)}`;
+    });
+}
 
 if (sidebarToggle) {
     sidebarToggle.addEventListener('click', toggleSidebar);
