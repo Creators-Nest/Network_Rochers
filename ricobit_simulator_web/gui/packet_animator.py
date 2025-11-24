@@ -15,6 +15,7 @@ class PacketAnimator:
         self.animation_items = []
         self.current_packet_item = None
         self.current_arrow_items = []
+        self.arrow_items = {}
         
     def clear_animations(self):
         """Clear all animation items from canvas"""
@@ -24,14 +25,22 @@ class PacketAnimator:
             except:
                 pass
         self.animation_items.clear()
-        
+
+        for items in self.arrow_items.values():
+            for item in items:
+                try:
+                    self.canvas.delete(item)
+                except:
+                    pass
+        self.arrow_items.clear()
+
         for item in self.current_arrow_items:
             try:
                 self.canvas.delete(item)
             except:
                 pass
         self.current_arrow_items.clear()
-        
+
         if self.current_packet_item:
             try:
                 self.canvas.delete(self.current_packet_item)
@@ -100,7 +109,7 @@ class PacketAnimator:
         
         return packet_id
     
-    def draw_transfer_arrow(self, x1, y1, x2, y2, phase="handshake", arc_points=None):
+    def draw_transfer_arrow(self, x1, y1, x2, y2, phase="handshake", arc_points=None, identifier=None):
         """Draw animated arrow showing data transfer direction with NS3-like moving animation
         
         Phases:
@@ -116,13 +125,23 @@ class PacketAnimator:
             phase: Transfer phase
             arc_points: Optional list of (x,y) tuples for curved path
         """
-        # Clear previous arrows
-        for item in self.current_arrow_items:
-            try:
-                self.canvas.delete(item)
-            except:
-                pass
-        self.current_arrow_items.clear()
+        items_for_identifier = []
+
+        if identifier is None:
+            for item in self.current_arrow_items:
+                try:
+                    self.canvas.delete(item)
+                except:
+                    pass
+            self.current_arrow_items.clear()
+            self.arrow_items.clear()
+        else:
+            existing_items = self.arrow_items.pop(identifier, [])
+            for item in existing_items:
+                try:
+                    self.canvas.delete(item)
+                except:
+                    pass
         
         # Use arc points if provided, otherwise straight line
         if arc_points and len(arc_points) > 2:
@@ -177,6 +196,7 @@ class PacketAnimator:
                 dash=dash if not animate else None,
                 tags='transfer_arrow'
             )
+            items_for_identifier.append(line_id)
             self.current_arrow_items.append(line_id)
             self.animation_items.append(line_id)
         else:
@@ -192,6 +212,7 @@ class PacketAnimator:
                 smooth=True,
                 tags='transfer_arrow'
             )
+            items_for_identifier.append(line_id)
             self.current_arrow_items.append(line_id)
             self.animation_items.append(line_id)
         
@@ -263,16 +284,20 @@ class PacketAnimator:
                     tags='transfer_arrow'
                 )
                 
+                items_for_identifier.extend([bg_id, text_id])
                 self.current_arrow_items.extend([bg_id, text_id])
                 self.animation_items.extend([bg_id, text_id])
         
         # Animate moving arrow if needed (NS3-style)
         if animate:
-            self._animate_moving_arrow(path_points, color, width)
+            self._animate_moving_arrow(path_points, color, width, tracked_items=items_for_identifier)
+
+        if identifier is not None:
+            self.arrow_items[identifier] = items_for_identifier
         
         return line_id
     
-    def _animate_moving_arrow(self, path_points, color, width, duration=800):
+    def _animate_moving_arrow(self, path_points, color, width, duration=800, tracked_items=None):
         """Animate a moving arrow along the path (NS3-style)
         
         Args:
@@ -396,6 +421,8 @@ class PacketAnimator:
                     tags='moving_arrow_trail'
                 )
                 self.current_arrow_items.append(trail_id)
+                if tracked_items is not None:
+                    tracked_items.append(trail_id)
             
             # Draw new arrow at current position
             arrow_length = 30
@@ -423,6 +450,8 @@ class PacketAnimator:
                 )
                 
                 self.current_arrow_items.append(arrow_id)
+                if tracked_items is not None:
+                    tracked_items.append(arrow_id)
             
             step[0] += 1
             self.canvas.after(step_duration, animate_step)

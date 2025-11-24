@@ -123,6 +123,7 @@ const PREVIEW_STYLE_DEFAULTS = {
 
 const PARALLEL_ROUTE_COLORS = ['#ff6a00ff', '#00aeffff', '#8400ffff', '#f60303ff', '#05faddff'];
 const HANDSHAKE_PHASES = new Set(['req', 'ack']);
+const HANDSHAKE_WITH_DATA_PHASES = new Set(['req', 'ack', 'data']);
 
 const STAGE_INDICATOR_COLORS = {
     ready: colors.nodeSelected,
@@ -2330,6 +2331,7 @@ function drawRoute(state, layout, options = {}) {
         directionHint = false,
         suppressDirectionHintPhases = null,
         activePhaseKey = null,
+        phaseIndicatorStages = null,
     } = options;
 
     const animationComplete = typeof state.isComplete === 'function' && state.isComplete();
@@ -2394,7 +2396,8 @@ function drawRoute(state, layout, options = {}) {
         }
 
         if (allowDirectionHint && completion > 0.1) {
-            const arrowProgress = completion >= 1 ? 0.9 : Math.min(Math.max(completion, 0.2), 0.9);
+            const arrowLead = 0;
+            const arrowProgress = Math.min(Math.max(completion + arrowLead, 0.2), 0.97);
             const arrowPoint = segmentPointWithAngle(segment, arrowProgress, layout, { allowClamp: true });
             const arrowColor = segment.type === 'ring' ? activeRingColor : activeTreeColor;
             drawFlowArrow(arrowPoint, arrowPoint.angle, arrowColor, { size: 12 });
@@ -2406,7 +2409,7 @@ function drawRoute(state, layout, options = {}) {
     if (current) {
         const { segment, progress } = current;
         if (showPhaseIndicators) {
-            drawPhaseIndicators(segment, progress, layout);
+            drawPhaseIndicators(segment, progress, layout, phaseIndicatorStages);
         }
 
         if (showIndicator) {
@@ -2479,12 +2482,9 @@ function drawDataMarker(point, angle, color) {
     ctx.translate(point.x, point.y);
     ctx.rotate(angle);
     ctx.fillStyle = color;
-    ctx.strokeStyle = '#0f172a0f';
-    ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.ellipse(0, 0, 9, 5, 0, 0, Math.PI * 2);
+    ctx.arc(0, 0, 7, 0, Math.PI * 2);
     ctx.fill();
-    ctx.stroke();
     ctx.restore();
 }
 
@@ -2499,28 +2499,41 @@ function drawReleasePulse(point, color) {
     ctx.restore();
 }
 
-function drawPhaseIndicators(segment, progress, layout) {
+function drawPhaseIndicators(segment, progress, layout, stageFilter = null) {
     const { req, ack, data, release } = PHASE_RANGES;
+    const allowStage = (stageKey) => {
+        if (!stageFilter) return true;
+        if (stageFilter instanceof Set) {
+            return stageFilter.has(stageKey);
+        }
+        if (Array.isArray(stageFilter)) {
+            return stageFilter.includes(stageKey);
+        }
+        if (typeof stageFilter === 'function') {
+            return stageFilter(stageKey);
+        }
+        return stageKey === stageFilter;
+    };
 
-    if (progress >= req[0] && progress < req[1]) {
+    if (allowStage('req') && progress >= req[0] && progress < req[1]) {
         const t = normalizeRange(progress, req[0], req[1]);
         const point = segmentPointWithAngle(segment, t, layout, { allowClamp: true });
         drawFlowArrow(point, point.angle, colors.phaseReq, { size: 10 });
     }
 
-    if (progress >= ack[0] && progress < ack[1]) {
+    if (allowStage('ack') && progress >= ack[0] && progress < ack[1]) {
         const t = normalizeRange(progress, ack[0], ack[1]);
         const point = segmentPointWithAngle(segment, t, layout, { reverse: true, allowClamp: true });
         drawFlowArrow(point, point.angle, colors.phaseAck, { size: 10, style: 'outline' });
     }
 
-    if (progress >= data[0] && progress < data[1]) {
+    if (allowStage('data') && progress >= data[0] && progress < data[1]) {
         const t = normalizeRange(progress, data[0], data[1]);
         const point = segmentPointWithAngle(segment, t, layout);
         drawDataMarker(point, point.angle, colors.phaseData);
     }
 
-    if (progress >= release[0]) {
+    if (allowStage('release') && progress >= release[0]) {
         const destPos = getNodePosition(segment.to.ring, segment.to.index, layout);
         drawReleasePulse(destPos, colors.phaseRelease);
     }
@@ -2649,15 +2662,13 @@ function renderTopology() {
         if (animationState.mode === 'parallel' && Array.isArray(animationState.animations)) {
             animationState.animations.forEach((animation, index) => {
                 const color = PARALLEL_ROUTE_COLORS[index % PARALLEL_ROUTE_COLORS.length];
-                const selectedIndex = typeof multiRunState?.selectedIndex === 'number'
-                    ? multiRunState.selectedIndex
-                    : 0;
                 const status = Array.isArray(animationState.latestStatuses)
                     ? animationState.latestStatuses[index]
                     : null;
                 drawRoute(animation, layoutCache, {
-                    showIndicator: true,
-                    showPhaseIndicators: index === selectedIndex,
+                    showIndicator: false,
+                    showPhaseIndicators: true,
+                    phaseIndicatorStages: HANDSHAKE_WITH_DATA_PHASES,
                     treeColor: color,
                     ringColor: color,
                     lineWidth: 3,
@@ -3891,12 +3902,6 @@ canvas.addEventListener('click', (event) => {
     if (nodeId) {
         handleCanvasNodeClick(nodeId);
         return;
-    } else if (isNodePanelOverlayMode() && isNodePanelOpen()) {
-        closeNodePanel();
-    } else if (selectedNodeId) {
-        selectedNodeId = null;
-        resetNodePanelContent();
-        renderTopology();
     }
     if (pickMode) {
         setPickMode(null);
@@ -3936,10 +3941,6 @@ if (sidebarOverlay) {
 
 if (nodePanelClose) {
     nodePanelClose.addEventListener('click', closeNodePanel);
-}
-
-if (nodePanelScrim) {
-    nodePanelScrim.addEventListener('click', closeNodePanel);
 }
 
 document.addEventListener('keydown', (event) => {

@@ -410,7 +410,7 @@ body {
 
 .sidebar-overlay.is-active {
     opacity: 1;
-    pointer-events: auto;
+    pointer-events: none; /* Allow interactions with underlying canvas while sidebar stays open */
 }
 
 .sidebar-toggle {
@@ -890,7 +890,7 @@ body {
 .node-panel {
     background: #ffffff;
     border-right: 1px solid rgba(15, 23, 42, 0.08);
-    padding: 28px 24px 32px;
+    padding: 0 24px 32px;
     display: flex;
     flex-direction: column;
     gap: 20px;
@@ -928,7 +928,7 @@ body {
 
 .node-panel__scrim.is-active {
     opacity: 1;
-    pointer-events: auto;
+    pointer-events: none;
 }
 
 .node-panel__header {
@@ -936,6 +936,13 @@ body {
     justify-content: space-between;
     align-items: flex-start;
     gap: 16px;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 28px 0 16px;
+    margin-bottom: 12px;
+    background: linear-gradient(180deg, #ffffff 0%, rgba(255, 255, 255, 0.92) 100%);
+    border-bottom: 1px solid rgba(15, 23, 42, 0.08);
 }
 
 .node-panel__heading {

@@ -1837,6 +1837,7 @@ Interfaces:     {len(node.interfaces)} connections
         
         # Get arc points if this is a ring hop
         arc_points = self._get_arc_points_for_hop(addr, next_addr)
+        arrow_key = ('link', addr, next_addr)
         
         # After short delay, show routing phase
         def show_routing():
@@ -1874,7 +1875,12 @@ Interfaces:     {len(node.interfaces)} connections
             self._update_status_bar(current_node=addr, next_node=next_addr, interface_state=req_state)
             
             # Show REQ arrow with arc path (source to dest)
-            self.packet_animator.draw_transfer_arrow(cx, cy, ncx, ncy, phase='req', arc_points=arc_points)
+            self.packet_animator.draw_transfer_arrow(
+                cx, cy, ncx, ncy,
+                phase='req',
+                arc_points=arc_points,
+                identifier=arrow_key
+            )
         
         self.root.after(int(self.animation_speed * 0.4), show_req)
         
@@ -1896,7 +1902,12 @@ Interfaces:     {len(node.interfaces)} connections
             self._update_status_bar(current_node=addr, next_node=next_addr, interface_state=ack_state)
             
             # Show ACK arrow with arc path (dest to source - will be reversed in draw_transfer_arrow)
-            self.packet_animator.draw_transfer_arrow(cx, cy, ncx, ncy, phase='ack', arc_points=arc_points)
+            self.packet_animator.draw_transfer_arrow(
+                cx, cy, ncx, ncy,
+                phase='ack',
+                arc_points=arc_points,
+                identifier=arrow_key
+            )
         
         self.root.after(int(self.animation_speed * 0.6), show_ack)
     
@@ -1918,6 +1929,7 @@ Interfaces:     {len(node.interfaces)} connections
         
         # Get arc points if this is a ring hop
         arc_points = self._get_arc_points_for_hop(addr, next_addr)
+        arrow_key = ('link', addr, next_addr)
         
         # Clock tracking for this hop
         base_clk = index * 5  # Each hop takes approximately 5 clock cycles
@@ -1938,7 +1950,12 @@ Interfaces:     {len(node.interfaces)} connections
         self._update_status_bar(current_node=addr, next_node=next_addr, interface_state=handshake_state_1)
         
         # Show REQ arrow with arc path (source to dest)
-        self.packet_animator.draw_transfer_arrow(cx, cy, ncx, ncy, phase='req', arc_points=arc_points)
+        self.packet_animator.draw_transfer_arrow(
+            cx, cy, ncx, ncy,
+            phase='req',
+            arc_points=arc_points,
+            identifier=arrow_key
+        )
         self.packet_animator.draw_node_activity_ring(cx, cy, activity='busy')
         
         # Phase 2: ACK (Acknowledgment) - Opposite direction animated arrow
@@ -1958,7 +1975,12 @@ Interfaces:     {len(node.interfaces)} connections
             self._update_status_bar(current_node=addr, next_node=next_addr, interface_state=handshake_state_2)
             
             # Show ACK arrow with arc path (dest to source - will be reversed)
-            self.packet_animator.draw_transfer_arrow(cx, cy, ncx, ncy, phase='ack', arc_points=arc_points)
+            self.packet_animator.draw_transfer_arrow(
+                cx, cy, ncx, ncy,
+                phase='ack',
+                arc_points=arc_points,
+                identifier=arrow_key
+            )
             self.packet_animator.draw_node_activity_ring(ncx, ncy, activity='ready')
         
         self.root.after(int(self.animation_speed * 0.2), show_ack)
@@ -1979,7 +2001,12 @@ Interfaces:     {len(node.interfaces)} connections
             }
             self._update_status_bar(current_node=addr, next_node=next_addr, interface_state=transfer_state)
             
-            self.packet_animator.draw_transfer_arrow(cx, cy, ncx, ncy, phase='data', arc_points=arc_points)
+            self.packet_animator.draw_transfer_arrow(
+                cx, cy, ncx, ncy,
+                phase='data',
+                arc_points=arc_points,
+                identifier=arrow_key
+            )
             self.packet_animator.draw_packet_at_node(cx, cy, phase='sending')
         
         self.root.after(int(self.animation_speed * 0.4), show_data_transfer)
