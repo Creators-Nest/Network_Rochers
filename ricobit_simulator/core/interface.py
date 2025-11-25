@@ -33,49 +33,48 @@ class Interface:
         other_interface.connected_interface = self
         
     def update_sender_logic(self):
-        """Implements the LEFT side of the Figure 6 flowchart (Node 1)"""
+        """Implements the LEFT side of the Figure 6 flowchart (Node 1)."""
         if not self.connected_interface:
             return
-        
-        # State: Idle - Try to start new transfer
-        if not self.bit_Busy and not self.bit_Transfer:
-            if not self.send_buffer.is_empty():
-                # Check if receiver is free
-                if not self.connected_interface.bit_Busy:
-                    # Start handshake
-                    self.pin_REQ = True
-                    self.bit_Busy = True
-                    self.timeout_counter = 0
-        
-        # State: Waiting for ACK
-        elif self.bit_Busy and not self.bit_Transfer:
-            # Check if we got ACK
+
+        if self.bit_Transfer:
+            if self.connected_interface.bit_Receive:
+                return
+
+            self.send_register = None
+            self.pin_DATA = None
+            self.bit_Transfer = False
+            self.bit_Busy = False
+            self.pin_REQ = False
+
+        if self.bit_Busy:
             if self.connected_interface.pin_ACK:
-                # Load packet into send register and start transfer
                 packet = self.send_buffer.dequeue()
-                self.send_register = packet
-                self.bit_Transfer = True
-                self.pin_DATA = packet
-                self.timeout_counter = 0
-            else:
-                # Timeout check
-                self.timeout_counter += 1
-                if self.timeout_counter >= self.TIMEOUT_LIMIT:
-                    # Cancel transfer
+                if packet is None:
                     self.pin_REQ = False
                     self.bit_Busy = False
-                    self.timeout_counter = 0
-        
-        # State: Transferring Data
-        elif self.bit_Transfer:
-            # Check if receiver has finished receiving
-            if not self.connected_interface.bit_Receive:
-                # Transfer complete - reset
-                self.send_register = None
+                    return
+
+                self.send_register = packet
+                self.pin_DATA = packet
+                self.bit_Transfer = True
+                self.timeout_counter = 0
+                return
+
+            self.timeout_counter += 1
+            if self.timeout_counter >= self.TIMEOUT_LIMIT:
                 self.pin_REQ = False
-                self.pin_DATA = None
-                self.bit_Transfer = False
                 self.bit_Busy = False
+                self.timeout_counter = 0
+            return
+
+        if not self.send_buffer.is_empty():
+            if not self.connected_interface.bit_Busy and not self.connected_interface.pin_CHOKE:
+                self.pin_REQ = True
+                self.bit_Busy = True
+                self.timeout_counter = 0
+            else:
+                self.pin_REQ = False
 
     def update_receiver_logic(self):
         """Implements the RIGHT side of the Figure 6 flowchart (Node 2)"""

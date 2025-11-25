@@ -318,6 +318,7 @@ function defaultNodeRuntimeState(meta = null) {
         sendBuffer: 'idle',
         receiveBuffer: 'idle',
         applicationBuffer: 0,
+        pendingOutbound: 0,
         handshake: 'idle',
         lastUpdated: 0,
         deliveredPackets: new Set(),
@@ -333,6 +334,9 @@ function ensureNodeRuntimeState(nodeId) {
     const runtime = nodeRuntimeState.get(nodeId);
     if (runtime && !(runtime.deliveredPackets instanceof Set)) {
         runtime.deliveredPackets = new Set();
+    }
+    if (runtime && typeof runtime.pendingOutbound !== 'number') {
+        runtime.pendingOutbound = 0;
     }
     return runtime;
 }
@@ -3793,7 +3797,7 @@ class ParallelRouteController {
             });
         }
 
-        runtime.applicationBuffer = active + waiting;
+        runtime.pendingOutbound = active + waiting;
         if (active > 0) {
             runtime.sendBuffer = 'transferring';
             runtime.handshake = 'transferring';
@@ -3803,6 +3807,7 @@ class ParallelRouteController {
         } else {
             runtime.sendBuffer = 'idle';
             runtime.handshake = 'idle';
+            runtime.pendingOutbound = 0;
         }
         runtime.lastUpdated = performance.now();
 
@@ -4137,13 +4142,12 @@ function updateNodeRuntimeFromStatus(status, animationContext = animationState) 
             targetState.receiveBuffer = 'idle';
             targetState.handshake = 'idle';
             if (
-                !isNmMode
-                && phaseChanged
+                phaseChanged
                 && originId
                 && sourceId === originId
-                && sourceState.applicationBuffer > 0
+                && sourceState.pendingOutbound > 0
             ) {
-                sourceState.applicationBuffer = Math.max(0, sourceState.applicationBuffer - 1);
+                sourceState.pendingOutbound = Math.max(0, sourceState.pendingOutbound - 1);
             }
             break;
         case 'req':
@@ -4172,7 +4176,6 @@ function updateNodeRuntimeFromStatus(status, animationContext = animationState) 
                 targetState.receiveBuffer = 'delivered';
             } else {
                 targetState.receiveBuffer = 'ready';
-                targetState.applicationBuffer = 0;
             }
             break;
         case 'completed':
@@ -4860,6 +4863,15 @@ async function simulateSingleRoute() {
     try {
         const payload = await fetchRoutePayload(source, destination);
         prepareRoute(payload);
+        const sourceId = makeNodeId(source);
+        const sourceRuntime = ensureNodeRuntimeState(sourceId);
+        sourceRuntime.pendingOutbound = 1;
+        sourceRuntime.sendBuffer = 'primed';
+        sourceRuntime.handshake = 'primed';
+        sourceRuntime.lastUpdated = performance.now();
+        if (isNodePanelOpen() && selectedNodeId === sourceId) {
+            updateNodePanelContent();
+        }
         setDetailedLog(
             buildDetailedLogForPayload(payload, {
                 label: 'Packet 1',
@@ -5014,36 +5026,6 @@ async function simulateParallelRoutes() {
             });
         });
 
-        const timestamp = performance.now();
-        queueConfig.forEach((config, key) => {
-            const stats = queueStats.get(key) || { active: 0, waiting: 0 };
-            const ifaceRuntime = ensureInterfaceRuntimeState(config.sourceId, config.neighborNode);
-            if (ifaceRuntime && ifaceRuntime.sendBuffer) {
-                ifaceRuntime.sendBuffer.capacity = config.capacity;
-                ifaceRuntime.sendBuffer.used = stats.active;
-                ifaceRuntime.sendBuffer.queue = stats.waiting;
-                ifaceRuntime.sendBuffer.state = stats.active > 0
-                    ? 'primed'
-                    : (stats.waiting > 0 ? 'primed' : 'idle');
-            }
-        });
-        const sourceRuntime = ensureNodeRuntimeState(sourceNodeId);
-        sourceRuntime.applicationBuffer = enrichedPayloads.length;
-        if (totalActive > 0) {
-            sourceRuntime.sendBuffer = 'primed';
-            sourceRuntime.handshake = 'primed';
-        } else if (totalWaiting > 0) {
-            sourceRuntime.sendBuffer = 'primed';
-            sourceRuntime.handshake = 'primed';
-        } else {
-            sourceRuntime.sendBuffer = 'idle';
-            sourceRuntime.handshake = 'idle';
-        }
-        sourceRuntime.lastUpdated = timestamp;
-        if (isNodePanelOpen() && selectedNodeId === sourceNodeId) {
-            updateNodePanelContent();
-        }
-
         const previewRoutes = enrichedPayloads.map((payload, index) => {
             const color = PARALLEL_ROUTE_COLORS[index % PARALLEL_ROUTE_COLORS.length];
             return new RoutePreview(payload, {
@@ -5121,6 +5103,36 @@ async function simulateParallelRoutes() {
         hudStatus.textContent = `Parallel routes ready (${packetCount}). Press "Animate all" or pick a route to inspect.`;
         const hasSegments = enrichedPayloads.some((payload) => Array.isArray(payload.segments) && payload.segments.length);
         updateAnimateButton({ disabled: !hasSegments, busy: false, label: 'Animate all' });
+
+        const snapshotTimestamp = performance.now();
+        queueConfig.forEach((config, key) => {
+            const stats = queueStats.get(key) || { active: 0, waiting: 0 };
+            const ifaceRuntime = ensureInterfaceRuntimeState(config.sourceId, config.neighborNode);
+            if (ifaceRuntime && ifaceRuntime.sendBuffer) {
+                ifaceRuntime.sendBuffer.capacity = config.capacity;
+                ifaceRuntime.sendBuffer.used = stats.active;
+                ifaceRuntime.sendBuffer.queue = stats.waiting;
+                ifaceRuntime.sendBuffer.state = stats.active > 0
+                    ? 'primed'
+                    : (stats.waiting > 0 ? 'primed' : 'idle');
+            }
+        });
+        const sourceRuntime = ensureNodeRuntimeState(sourceNodeId);
+        sourceRuntime.pendingOutbound = enrichedPayloads.length;
+        if (totalActive > 0) {
+            sourceRuntime.sendBuffer = 'primed';
+            sourceRuntime.handshake = 'primed';
+        } else if (totalWaiting > 0) {
+            sourceRuntime.sendBuffer = 'primed';
+            sourceRuntime.handshake = 'primed';
+        } else {
+            sourceRuntime.sendBuffer = 'idle';
+            sourceRuntime.handshake = 'idle';
+        }
+        sourceRuntime.lastUpdated = snapshotTimestamp;
+        if (isNodePanelOpen() && selectedNodeId === sourceNodeId) {
+            updateNodePanelContent();
+        }
 
     } catch (error) {
         console.error(error);
@@ -5321,29 +5333,6 @@ async function simulateNmRoutes() {
         }
     });
 
-    const timestamp = performance.now();
-    interfaceTotals.forEach((info) => {
-        const ifaceRuntime = ensureInterfaceRuntimeState(info.sourceId, info.neighborNode);
-        if (ifaceRuntime && ifaceRuntime.sendBuffer) {
-            ifaceRuntime.sendBuffer.capacity = info.capacity;
-            ifaceRuntime.sendBuffer.used = Math.min(info.capacity, info.active);
-            ifaceRuntime.sendBuffer.queue = Math.max(info.waiting, 0);
-            ifaceRuntime.sendBuffer.state = info.active > 0 ? 'primed' : (info.waiting > 0 ? 'primed' : 'idle');
-        }
-        const sourceRuntime = ensureNodeRuntimeState(info.sourceId);
-        sourceRuntime.sendBuffer = info.active > 0 ? 'primed' : (info.waiting > 0 ? 'primed' : 'idle');
-        sourceRuntime.handshake = info.active > 0 ? 'primed' : (info.waiting > 0 ? 'primed' : 'idle');
-        sourceRuntime.lastUpdated = timestamp;
-    });
-    sourceTotals.forEach((total, sourceId) => {
-        const sourceRuntime = ensureNodeRuntimeState(sourceId);
-        sourceRuntime.applicationBuffer = total;
-        sourceRuntime.lastUpdated = timestamp;
-    });
-    if (isNodePanelOpen()) {
-        updateNodePanelContent();
-    }
-
     multiRunState = {
         mode: 'nm',
         payloads: routePayloads,
@@ -5399,15 +5388,35 @@ async function simulateNmRoutes() {
     hudStatus.textContent = `Parallel plan ready: ${routePayloads.length} route${routePayloads.length === 1 ? '' : 's'}, ${totalPackets} packet${totalPackets === 1 ? '' : 's'}.`;
     updateAnimateButton({ disabled: false, busy: false, label: 'Animate all' });
 
-    routePayloads.forEach((payload, index) => {
-        const firstPathNode = Array.isArray(payload.path) && payload.path.length ? payload.path[0] : payload.sourceNode;
-        const sourceNode = firstPathNode || plan[index]?.source || plan[0]?.source;
-        const sourceId = makeNodeId(sourceNode);
+    const nmSnapshotTimestamp = performance.now();
+    interfaceTotals.forEach((info) => {
+        const ifaceRuntime = ensureInterfaceRuntimeState(info.sourceId, info.neighborNode);
+        if (ifaceRuntime && ifaceRuntime.sendBuffer) {
+            ifaceRuntime.sendBuffer.capacity = info.capacity;
+            ifaceRuntime.sendBuffer.used = Math.min(info.capacity, info.active);
+            ifaceRuntime.sendBuffer.queue = Math.max(info.waiting, 0);
+            ifaceRuntime.sendBuffer.state = info.active > 0 ? 'primed' : (info.waiting > 0 ? 'primed' : 'idle');
+        }
+        const sourceRuntime = ensureNodeRuntimeState(info.sourceId);
+        if (info.active > 0) {
+            sourceRuntime.sendBuffer = 'primed';
+            sourceRuntime.handshake = 'primed';
+        } else if (info.waiting > 0) {
+            sourceRuntime.sendBuffer = 'primed';
+            sourceRuntime.handshake = 'primed';
+        }
+    });
+    sourceTotals.forEach((total, sourceId) => {
         const sourceRuntime = ensureNodeRuntimeState(sourceId);
-        sourceRuntime.applicationBuffer = Math.max(1, payload.packetBatches);
-        sourceRuntime.handshake = payload.packetBatches > 0 ? 'primed' : 'idle';
-        sourceRuntime.sendBuffer = payload.packetBatches > 0 ? 'primed' : 'idle';
-        sourceRuntime.lastUpdated = performance.now();
+        sourceRuntime.pendingOutbound = total;
+        if (total > 0) {
+            sourceRuntime.sendBuffer = 'primed';
+            sourceRuntime.handshake = 'primed';
+        } else {
+            sourceRuntime.sendBuffer = 'idle';
+            sourceRuntime.handshake = 'idle';
+        }
+        sourceRuntime.lastUpdated = nmSnapshotTimestamp;
     });
     if (isNodePanelOpen()) {
         updateNodePanelContent();
