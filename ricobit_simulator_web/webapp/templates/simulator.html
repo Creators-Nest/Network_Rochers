@@ -41,6 +41,7 @@
                         <select id="simulationMode">
                             <option value="single">1 → 1</option>
                             <option value="parallel">1 → n (parallel)</option>
+                            <option value="nm">n → m (parallel)</option>
                         </select>
                     </div>
                     <div class="form-control">
@@ -62,15 +63,31 @@
                         <div class="input-with-action">
                             <select id="destinationCandidateSelect"></select>
                             <button id="clearMultiDestinationsBtn" class="mini-btn" type="button" title="Clear destinations">Clear all</button>
-                            <button id="addMultiDestinationBtn" class="mini-btn" type="button" title="Add destination to list">+</button>
-                            <button id="pickDestinationMultiBtn" class="mini-btn" type="button" aria-pressed="false" title="Pick destination from canvas">Pick</button>
+                            <button id="pickDestinationMultiBtn" class="mini-btn" type="button" aria-pressed="false" title="Pick &amp; add destination from canvas">Pick</button>
                         </div>
                         <div id="multiDestinationList" class="destination-list" role="list"></div>
                         
                     </div>
-                    <div class="form-control form-control--inline">
-                        <label for="speedControl">Speed</label>
-                        <input id="speedControl" type="range" min="0.2" max="1.5" step="0.1" value="0.6">
+                    <div class="form-control" data-mode-area="nm" style="display: none;">
+                        <label>Route plan</label>
+                        <p class="form-hint">Define source, destination, and packet count for each parallel transmission.</p>
+                        <div class="nm-table-wrapper" role="region" aria-live="polite">
+                            <table class="nm-route-table" aria-label="Parallel route plan">
+                                <thead>
+                                    <tr>
+                                        <th scope="col">Source</th>
+                                        <th scope="col">Destination</th>
+                                        <th scope="col">Packets</th>
+                                        <th scope="col" class="nm-route-table__actions">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="nmRouteTableBody"></tbody>
+                            </table>
+                        </div>
+                        <div class="nm-route-actions">
+                            <button id="addNmRouteBtn" class="mini-btn" type="button">Add route</button>
+                            <button id="clearNmRoutesBtn" class="mini-btn" type="button">Clear all</button>
+                        </div>
                     </div>
                     <div class="button-row">
                         <button id="simulateBtn" class="primary-btn">Simulate route</button>
@@ -94,7 +111,10 @@
                 <div id="multiRouteList" class="multi-route-list" aria-live="polite" style="display: none;"></div>
 
                 <section class="sidebar__section" aria-labelledby="flow-timeline">
-                    <h2 id="flow-timeline">Flow timeline</h2>
+                    <div class="section-header" style="display: flex; flex-direction: row; gap:10px;">
+                        <h2 id="flow-timeline">Flow timeline</h2>
+                        <button id="openLogModalBtn" class="mini-btn" type="button" disabled aria-disabled="true">View detailed log</button>
+                    </div>
                     <div id="flowLog" class="flow-log" aria-live="polite"></div>
                 </section>
             </div>
@@ -199,13 +219,65 @@
                     <div class="hud" id="hud">
                         <span id="hudStatus">Idle</span>
                     </div>
-                    <div class="canvas-controls" role="group" aria-label="View controls">
-                        <button id="cursorModeBtn" type="button" title="Toggle scroll zoom" aria-pressed="false">⊹</button>
-                        <button id="resetViewBtn" type="button" title="Reset view">⟳</button>
-                        <button id="pauseAnimationBtn" type="button" title="Pause animation" aria-pressed="false" disabled>⏸</button>
-                        <button id="restartAnimationBtn" type="button" title="Restart animation" disabled>↺</button>
-                        <button id="zoomInBtn" type="button" title="Zoom in">＋</button>
-                        <button id="zoomOutBtn" type="button" title="Zoom out">－</button>
+                    <div class="canvas-controls" role="group" aria-label="Canvas and animation controls">
+                        <button id="cursorModeBtn" class="canvas-control-btn" type="button" aria-pressed="false" aria-label="Toggle scroll zoom" title="Toggle scroll zoom">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <polygon points="4,3 19.1,11.6 13.5,12.8 16.7,20.8 14.2,21.9 11,13.7 7.4,17.3" fill="currentColor"></polygon>
+                            </svg>
+                        </button>
+                        <button id="zoomInBtn" class="canvas-control-btn" type="button" aria-label="Zoom in" title="Zoom in">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M10.5 3a7.5 7.5 0 0 1 5.76 12.26l3.98 3.98a1.2 1.2 0 0 1-1.7 1.7l-3.98-3.98A7.5 7.5 0 1 1 10.5 3Zm0 3a.9.9 0 0 0-.9.9V9h-2.1a.9.9 0 1 0 0 1.8h2.1v2.1a.9.9 0 0 0 1.8 0V10.8h2.1a.9.9 0 1 0 0-1.8H11.4V6.9a.9.9 0 0 0-.9-.9Z" fill="currentColor"></path>
+                            </svg>
+                        </button>
+                        <button id="zoomOutBtn" class="canvas-control-btn" type="button" aria-label="Zoom out" title="Zoom out">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M10.5 3a7.5 7.5 0 0 1 5.76 12.26l3.98 3.98a1.2 1.2 0 0 1-1.7 1.7l-3.98-3.98A7.5 7.5 0 1 1 10.5 3Zm-3.9 6.9a.9.9 0 0 0 0 1.8h7.8a.9.9 0 1 0 0-1.8z" fill="currentColor"></path>
+                            </svg>
+                        </button>
+                        <button id="resetViewBtn" class="canvas-control-btn" type="button" aria-label="Reset view" title="Reset view">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M12 3a9 9 0 1 1-6.36 2.64 1 1 0 0 1 1.41 1.41A7 7 0 1 0 12 5a7 7 0 0 0-4.95 2.05l1.04 1.04A1 1 0 0 1 6.64 9.5L3.4 6.26a1 1 0 0 1 0-1.41L6.64 1.6a1 1 0 0 1 1.41 1.41L7.01 4.04A9 9 0 0 1 12 3Zm0 4a5 5 0 1 1-3.54 1.46A1 1 0 0 1 9.9 9.9 3 3 0 1 0 12 10a1 1 0 0 1 1-1h1a1 1 0 1 1 0 2h-.3A5 5 0 0 1 12 7Z" fill="currentColor"></path>
+                            </svg>
+                        </button>
+
+                        <span class="canvas-controls__divider" aria-hidden="true"></span>
+
+                        <button id="canvasSimulateBtn" class="canvas-control-btn" type="button" aria-label="Simulate route" title="Simulate route">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <circle cx="6.5" cy="6" r="2.3" fill="currentColor"></circle>
+                                <circle cx="17.5" cy="6" r="2.3" fill="currentColor"></circle>
+                                <circle cx="12" cy="17.5" r="2.3" fill="currentColor"></circle>
+                                <path d="M8.2 7.6 11 11.4M15.8 7.6 13 11.4M8.6 15.6 11 12.4M15.4 15.6 13 12.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+                            </svg>
+                        </button>
+                        <button id="playPauseAnimationBtn" class="canvas-control-btn canvas-control-btn--primary" type="button" aria-label="Start animation" title="Start animation" data-state="play" disabled>
+                            <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <path d="M9 6l10 6-10 6V6z"></path>
+                            </svg>
+                            <svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <rect x="6" y="5" width="3" height="14" rx="1"></rect>
+                                <rect x="15" y="5" width="3" height="14" rx="1"></rect>
+                            </svg>
+                        </button>
+                        <button id="restartAnimationBtn" class="canvas-control-btn" type="button" aria-label="Reset simulation" title="Reset simulation">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M12 3a9 9 0 1 1-6.92 15.08 1 1 0 1 1 1.44-1.38A7 7 0 1 0 12 5a7.1 7.1 0 0 0-4.13 1.3l1.32 1.32a.9.9 0 1 1-1.27 1.27L4.16 5.13a.9.9 0 0 1 0-1.27L8.35.67a.9.9 0 1 1 1.27 1.27L8.3 3.26A9 9 0 0 1 12 3Z" fill="currentColor"></path>
+                                <path d="M17.6 12.6a1 1 0 0 1 1 1v3.8a1 1 0 0 1-1 1h-3.8a1 1 0 0 1 0-2h2.2l-2.76-2.76a1 1 0 0 1 1.42-1.42l2.74 2.74v-1.36a1 1 0 0 1 1-1Z" fill="currentColor"></path>
+                            </svg>
+                        </button>
+
+                        <div class="speed-menu">
+                            <button id="speedMenuBtn" class="canvas-control-btn canvas-control-btn--wide" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Speed 1.0×" title="Adjust speed" data-speed-label="1.0×">
+                                    <path d="M12 3.5a8.5 8.5 0 0 0-8.5 8.5 1 1 0 0 0 1 1h2.8a1 1 0 0 0 .95-.68 4.7 4.7 0 0 1 8.5 0 1 1 0 0 0 .95.68H20a1 1 0 0 0 1-1A8.5 8.5 0 0 0 12 3.5Zm0 4a1 1 0 0 0-.88.5l-2.6 4.54a1 1 0 0 0 1.76.92l2.6-4.54A1 1 0 0 0 12 7.5Z" fill="currentColor"></path>
+                                </svg>
+                                <span>1.0×</span>
+                            </button>
+                            <div id="speedMenuPopover" class="speed-menu__popover" role="dialog" aria-label="Adjust animation speed" hidden>
+                                <label class="speed-menu__label" for="speedControl">Speed</label>
+                                <input id="speedControl" type="range" min="0.2" max="1.5" step="0.1" value="0.6">
+                            </div>
+                        </div>
                     </div>
                 </div>
             </main>
@@ -271,7 +343,7 @@
             <dl id="nodePanelLogic" class="node-panel__logic"></dl>
         </section>
 
-        <section class="node-panel__section" aria-labelledby="node-panel-interfaces-label">
+        <section class="node-panel__section node-panel__section--interfaces" aria-labelledby="node-panel-interfaces-label">
             <h3 id="node-panel-interfaces-label">Interface detail</h3>
             <div id="nodePanelInterfaces" class="interface-list"></div>
         </section>
@@ -279,6 +351,25 @@
     </div>
 
     <div id="nodePanelScrim" class="node-panel__scrim" aria-hidden="true"></div>
+
+    <div id="logModal" class="modal" aria-hidden="true">
+        <div class="modal__overlay" data-close-modal="true"></div>
+        <div class="modal__content" role="dialog" aria-modal="true" aria-labelledby="logModalTitle">
+            <header class="modal__header">
+                <div class="modal__heading">
+                    <h2 id="logModalTitle">Detailed log</h2>
+                </div>
+                <div class="modal__actions">
+                    <button id="exportLogPdfBtn" class="modal__action-btn" type="button" disabled aria-disabled="true">Export PDF</button>
+                    <button id="logModalClose" class="modal__close" type="button" aria-label="Close detailed log">&times;</button>
+                </div>
+            </header>
+            <div id="logModalBody" class="modal__body"></div>
+            <footer class="modal__footer">
+                <small class="modal__footer-note">© RicoBit Simulator. All rights reserved.</small>
+            </footer>
+        </div>
+    </div>
 
     <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
 </body>

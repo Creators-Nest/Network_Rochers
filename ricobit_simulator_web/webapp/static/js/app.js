@@ -12,13 +12,18 @@ const summary = document.getElementById('routeSummary');
 const pickSourceBtn = document.getElementById('pickSourceBtn');
 const pickDestinationBtn = document.getElementById('pickDestinationBtn');
 const destinationCandidateSelect = document.getElementById('destinationCandidateSelect');
-const addMultiDestinationBtn = document.getElementById('addMultiDestinationBtn');
 const pickDestinationMultiBtn = document.getElementById('pickDestinationMultiBtn');
+
+const sourceField = sourceSelect ? sourceSelect.closest('.form-control') : null;
 
 const applyTopologyBtn = document.getElementById('applyTopologyBtn');
 const levelInput = document.getElementById('levelInput');
 const simulateBtn = document.getElementById('simulateBtn');
 const animateBtn = document.getElementById('animateBtn');
+const playPauseAnimationBtn = document.getElementById('playPauseAnimationBtn');
+const canvasSimulateBtn = document.getElementById('canvasSimulateBtn');
+const speedMenuBtn = document.getElementById('speedMenuBtn');
+const speedMenuPopover = document.getElementById('speedMenuPopover');
 const resetBtn = document.getElementById('resetBtn');
 const simulationModeSelect = document.getElementById('simulationMode');
 const clearMultiDestinationsBtn = document.getElementById('clearMultiDestinationsBtn');
@@ -26,12 +31,17 @@ const multiDestinationList = document.getElementById('multiDestinationList');
 const multiRouteList = document.getElementById('multiRouteList');
 const singleDestinationField = document.querySelector('[data-mode-area="single"]');
 const multiDestinationField = document.querySelector('[data-mode-area="multi"]');
+const nmRouteField = document.querySelector('[data-mode-area="nm"]');
+const nmRouteTableBody = document.getElementById('nmRouteTableBody');
+const addNmRouteBtn = document.getElementById('addNmRouteBtn');
+const clearNmRoutesBtn = document.getElementById('clearNmRoutesBtn');
+const openLogModalBtn = document.getElementById('openLogModalBtn');
+const exportLogPdfBtn = document.getElementById('exportLogPdfBtn');
 
 const zoomInBtn = document.getElementById('zoomInBtn');
 const zoomOutBtn = document.getElementById('zoomOutBtn');
 const resetViewBtn = document.getElementById('resetViewBtn');
 const cursorModeBtn = document.getElementById('cursorModeBtn');
-const pauseAnimationBtn = document.getElementById('pauseAnimationBtn');
 const restartAnimationBtn = document.getElementById('restartAnimationBtn');
 const sidebarToggle = document.getElementById('sidebarToggle');
 const sidebarCloseBtn = document.getElementById('sidebarClose');
@@ -54,6 +64,11 @@ const nodePanelAppBuffer = document.getElementById('nodePanelAppBuffer');
 const nodePanelHandshake = document.getElementById('nodePanelHandshake');
 const autoNodeDetailsBtn = document.getElementById('autoNodeDetailsBtn');
 const phaseTimelineSteps = Array.from(document.querySelectorAll('[data-phase]'));
+const logModal = document.getElementById('logModal');
+const logModalTitle = document.getElementById('logModalTitle');
+const logModalBody = document.getElementById('logModalBody');
+const logModalClose = document.getElementById('logModalClose');
+const logModalOverlay = logModal ? logModal.querySelector('[data-close-modal="true"]') : null;
 
 const statusElements = {
     hopValue: document.getElementById('statusHopValue'),
@@ -144,6 +159,29 @@ function computeSpeedMultiplier(rawValue) {
     return resolveSpeedSliderValue(rawValue) * SPEED_SCALE;
 }
 
+function formatSpeedDisplay(rawValue) {
+    const sliderValue = resolveSpeedSliderValue(rawValue);
+    if (DEFAULT_SPEED_SLIDER <= 0) {
+        return `${sliderValue.toFixed(1)}×`;
+    }
+    const relative = sliderValue / DEFAULT_SPEED_SLIDER;
+    return `${relative.toFixed(1)}×`;
+}
+
+function updateSpeedMenuLabel(rawValue) {
+    if (!speedMenuBtn) {
+        return;
+    }
+    const labelText = formatSpeedDisplay(rawValue);
+    const textSpan = speedMenuBtn.querySelector('span');
+    if (textSpan) {
+        textSpan.textContent = labelText;
+    }
+    speedMenuBtn.dataset.speedLabel = labelText;
+    speedMenuBtn.setAttribute('aria-label', `Speed ${labelText}`);
+    speedMenuBtn.title = `Speed ${labelText}`;
+}
+
 const viewState = {
     zoom: 1,
     panX: 0,
@@ -180,13 +218,20 @@ let autoNodeDetailsPreference = false;
 let routePreview = null;
 let lastRoutePayload = null;
 let multiRunState = null;
+let detailedLogEntries = [];
+let detailedLogTitle = 'Detailed log';
 const multiDestinations = [];
+const nmRoutes = [];
+let nmRouteCounter = 0;
 let animationOptions = null;
 let animationPaused = false;
 let animationPauseTimestamp = null;
 let pickMode = null;
 let currentSourceId = null;
 let currentDestinationId = null;
+let nodeOptionsCache = [];
+let suppressCandidateSelectChange = false;
+let speedMenuOpen = false;
 
 if (animateBtn) {
     animateBtn.dataset.defaultLabel = animateBtn.textContent;
@@ -230,6 +275,7 @@ function defaultInterfaceRuntime(metaInterface = null) {
             capacity: sendCapacity,
             head: null,
             state: 'idle',
+            queue: 0,
         },
         receiveBuffer: {
             used: 0,
@@ -274,6 +320,7 @@ function defaultNodeRuntimeState(meta = null) {
         applicationBuffer: 0,
         handshake: 'idle',
         lastUpdated: 0,
+        deliveredPackets: new Set(),
         interfaces,
     };
 }
@@ -283,7 +330,11 @@ function ensureNodeRuntimeState(nodeId) {
         const meta = nodeMeta.get(nodeId) || null;
         nodeRuntimeState.set(nodeId, defaultNodeRuntimeState(meta));
     }
-    return nodeRuntimeState.get(nodeId);
+    const runtime = nodeRuntimeState.get(nodeId);
+    if (runtime && !(runtime.deliveredPackets instanceof Set)) {
+        runtime.deliveredPackets = new Set();
+    }
+    return runtime;
 }
 
 function resetAllNodeRuntimeState() {
@@ -335,33 +386,76 @@ function syncSelectionState() {
     currentDestinationId = destinationSelect ? destinationSelect.value || null : null;
 }
 
+function normalizePickMode(mode) {
+    if (!mode) {
+        return null;
+    }
+    if (typeof mode === 'string') {
+        return (mode === 'source' || mode === 'destination') ? { type: mode, rowId: null } : null;
+    }
+    if (typeof mode === 'object' && (mode.type === 'source' || mode.type === 'destination')) {
+        return {
+            type: mode.type,
+            rowId: mode.rowId || null,
+        };
+    }
+    return null;
+}
+
 function setPickMode(mode) {
-    const normalized = mode === 'source' || mode === 'destination' ? mode : null;
+    const normalized = normalizePickMode(mode);
     pickMode = normalized;
+
+    const isSourceGlobal = normalized && normalized.type === 'source' && !normalized.rowId;
+    const isDestGlobal = normalized && normalized.type === 'destination' && !normalized.rowId;
+
     if (pickSourceBtn) {
-        const active = normalized === 'source';
-        pickSourceBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
-        pickSourceBtn.classList.toggle('is-active', active);
+        pickSourceBtn.setAttribute('aria-pressed', isSourceGlobal ? 'true' : 'false');
+        pickSourceBtn.classList.toggle('is-active', Boolean(isSourceGlobal));
     }
     if (pickDestinationBtn) {
-        const active = normalized === 'destination';
-        pickDestinationBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
-        pickDestinationBtn.classList.toggle('is-active', active);
+        pickDestinationBtn.setAttribute('aria-pressed', isDestGlobal ? 'true' : 'false');
+        pickDestinationBtn.classList.toggle('is-active', Boolean(isDestGlobal));
     }
     if (pickDestinationMultiBtn) {
-        const active = normalized === 'destination';
-        pickDestinationMultiBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
-        pickDestinationMultiBtn.classList.toggle('is-active', active);
+        pickDestinationMultiBtn.setAttribute('aria-pressed', isDestGlobal ? 'true' : 'false');
+        pickDestinationMultiBtn.classList.toggle('is-active', Boolean(isDestGlobal));
     }
+
+    nmRoutes.forEach((route) => {
+        if (!route.pickSourceBtn || !route.pickDestinationBtn) {
+            return;
+        }
+        const sourceActive = normalized && normalized.type === 'source' && normalized.rowId === route.id;
+        const destActive = normalized && normalized.type === 'destination' && normalized.rowId === route.id;
+        route.pickSourceBtn.classList.toggle('is-active', Boolean(sourceActive));
+        route.pickDestinationBtn.classList.toggle('is-active', Boolean(destActive));
+        route.pickSourceBtn.setAttribute('aria-pressed', sourceActive ? 'true' : 'false');
+        route.pickDestinationBtn.setAttribute('aria-pressed', destActive ? 'true' : 'false');
+    });
+
     if (canvas) {
         canvas.classList.toggle('is-picking', Boolean(normalized));
     }
-    if (normalized && hudStatus) {
-        hudStatus.textContent = normalized === 'source'
-            ? 'Click a node to choose the source.'
-            : isMultiSimulationMode()
-                ? 'Click a node to set the destination candidate.'
+
+    if (hudStatus) {
+        if (!normalized) {
+            return;
+        }
+        const modeLabel = normalized.type === 'source' ? 'source' : 'destination';
+        if (normalized.rowId) {
+            const index = nmRoutes.findIndex((route) => route.id === normalized.rowId);
+            const rowLabel = index >= 0 ? `route ${index + 1}` : 'route';
+            hudStatus.textContent = normalized.type === 'source'
+                ? `Click a node to set the ${modeLabel} for ${rowLabel}.`
+                : `Click a node to set the ${modeLabel} for ${rowLabel}.`;
+        } else if (normalized.type === 'source') {
+            hudStatus.textContent = 'Click a node to choose the source.';
+        } else {
+            hudStatus.textContent = isMultiSimulationMode()
+                ? 'Click a node to add it to the destination list.'
                 : 'Click a node to choose the destination.';
+        }
     }
 }
 
@@ -491,6 +585,209 @@ function clearMultiDestinationList({ announce = true } = {}) {
     if (announce && hudStatus) {
         hudStatus.textContent = 'Destination list cleared.';
     }
+}
+
+function populateSelectElementFromCache(select, selectedValue) {
+    if (!select) return;
+    const previous = typeof selectedValue === 'string' ? selectedValue : select.value;
+    select.innerHTML = '';
+    nodeOptionsCache.forEach((opt) => {
+        const optionEl = document.createElement('option');
+        optionEl.value = opt.value;
+        optionEl.textContent = opt.label;
+        select.appendChild(optionEl);
+    });
+    if (previous && nodeOptionsCache.some((opt) => opt.value === previous)) {
+        select.value = previous;
+    } else if (nodeOptionsCache.length) {
+        select.value = nodeOptionsCache[0].value;
+    }
+}
+
+function addNmRouteRow(initial = {}) {
+    if (!nmRouteTableBody) return null;
+    nmRouteCounter += 1;
+    const id = initial.id || `nm-${nmRouteCounter}`;
+    const row = document.createElement('tr');
+    row.dataset.routeId = id;
+
+    const sourceCell = document.createElement('td');
+    const sourceSelect = document.createElement('select');
+    sourceSelect.className = 'nm-node-select';
+    populateSelectElementFromCache(sourceSelect, initial.sourceId);
+    sourceCell.appendChild(sourceSelect);
+
+    const destCell = document.createElement('td');
+    const destSelect = document.createElement('select');
+    destSelect.className = 'nm-node-select';
+    populateSelectElementFromCache(destSelect, initial.destinationId);
+    destCell.appendChild(destSelect);
+
+    const packetCell = document.createElement('td');
+    const packetsInput = document.createElement('input');
+    packetsInput.type = 'number';
+    packetsInput.min = '1';
+    packetsInput.value = Math.max(1, parseInt(initial.packets ?? 1, 10) || 1);
+    packetsInput.className = 'nm-packet-input';
+    packetCell.appendChild(packetsInput);
+
+    const actionsCell = document.createElement('td');
+    actionsCell.className = 'nm-route-table__actions';
+    const sourcePickBtn = document.createElement('button');
+    sourcePickBtn.type = 'button';
+    sourcePickBtn.className = 'mini-btn';
+    sourcePickBtn.textContent = 'Src';
+    sourcePickBtn.title = 'Pick source from canvas';
+    sourcePickBtn.setAttribute('aria-label', 'Pick source from canvas');
+    sourcePickBtn.dataset.routeId = id;
+    const destPickBtn = document.createElement('button');
+    destPickBtn.type = 'button';
+    destPickBtn.className = 'mini-btn';
+    destPickBtn.textContent = 'Des';
+    destPickBtn.title = 'Pick destination from canvas';
+    destPickBtn.setAttribute('aria-label', 'Pick destination from canvas');
+    destPickBtn.dataset.routeId = id;
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'mini-btn';
+    removeBtn.textContent = '✕';
+    removeBtn.title = 'Remove route';
+    actionsCell.appendChild(sourcePickBtn);
+    actionsCell.appendChild(destPickBtn);
+    actionsCell.appendChild(removeBtn);
+
+    row.appendChild(sourceCell);
+    row.appendChild(destCell);
+    row.appendChild(packetCell);
+    row.appendChild(actionsCell);
+    nmRouteTableBody.appendChild(row);
+
+    const routeRecord = {
+        id,
+        element: row,
+        sourceSelect,
+        destSelect,
+        packetsInput,
+        pickSourceBtn: sourcePickBtn,
+        pickDestinationBtn: destPickBtn,
+        removeBtn,
+        get sourceId() {
+            return this.sourceSelect.value;
+        },
+        get destinationId() {
+            return this.destSelect.value;
+        },
+        get packetCount() {
+            return Math.max(1, parseInt(this.packetsInput.value, 10) || 1);
+        },
+    };
+
+    sourceSelect.addEventListener('change', () => {
+        setPickMode(null);
+        renderTopology();
+    });
+    destSelect.addEventListener('change', () => {
+        setPickMode(null);
+        renderTopology();
+    });
+    packetsInput.addEventListener('change', () => {
+        const sanitized = Math.max(1, parseInt(packetsInput.value, 10) || 1);
+        packetsInput.value = sanitized;
+    });
+    sourcePickBtn.addEventListener('click', () => {
+        const active = pickMode && pickMode.type === 'source' && pickMode.rowId === id;
+        setPickMode(active ? null : { type: 'source', rowId: id });
+    });
+    destPickBtn.addEventListener('click', () => {
+        const active = pickMode && pickMode.type === 'destination' && pickMode.rowId === id;
+        setPickMode(active ? null : { type: 'destination', rowId: id });
+    });
+    removeBtn.addEventListener('click', () => {
+        removeNmRouteRow(id);
+    });
+
+    nmRoutes.push(routeRecord);
+    renderTopology();
+    return routeRecord;
+}
+
+function removeNmRouteRow(routeId) {
+    const index = nmRoutes.findIndex((route) => route.id === routeId);
+    if (index === -1) {
+        return;
+    }
+    const [route] = nmRoutes.splice(index, 1);
+    if (route?.element?.parentNode) {
+        route.element.parentNode.removeChild(route.element);
+    }
+    if (pickMode && pickMode.rowId === routeId) {
+        setPickMode(null);
+    }
+    renderTopology();
+}
+
+function clearNmRoutes({ announce = true } = {}) {
+    while (nmRoutes.length) {
+        const route = nmRoutes.pop();
+        if (route?.element?.parentNode) {
+            route.element.parentNode.removeChild(route.element);
+        }
+    }
+    if (announce && hudStatus) {
+        hudStatus.textContent = 'Route plan cleared.';
+    }
+    setPickMode(null);
+    renderTopology();
+}
+
+function refreshNmRouteOptions() {
+    if (!nmRoutes.length) {
+        return;
+    }
+    nmRoutes.forEach((route) => {
+        populateSelectElementFromCache(route.sourceSelect, route.sourceId);
+        populateSelectElementFromCache(route.destSelect, route.destinationId);
+    });
+    renderTopology();
+}
+
+function collectNmRoutes() {
+    return nmRoutes
+        .map((route) => ({
+            id: route.id,
+            sourceId: route.sourceId,
+            destinationId: route.destinationId,
+            packets: route.packetCount,
+            source: parseSelectValue(route.sourceId),
+            destination: parseSelectValue(route.destinationId),
+        }))
+        .filter((entry) => Number.isFinite(entry.source.ring)
+            && Number.isFinite(entry.source.index)
+            && Number.isFinite(entry.destination.ring)
+            && Number.isFinite(entry.destination.index));
+}
+
+function resolveSendBufferCapacity(sourceId, nextHop) {
+    if (!sourceId) {
+        return 4;
+    }
+    const sourceMeta = nodeMeta.get(sourceId);
+    if (!sourceMeta || !Array.isArray(sourceMeta.interfaces)) {
+        return 4;
+    }
+    if (!nextHop) {
+        const fallback = sourceMeta.interfaces[0]?.sendBuffer?.capacity
+            ?? sourceMeta.interfaces[0]?.sendCapacity;
+        const numeric = Number(fallback);
+        return Number.isFinite(numeric) && numeric > 0 ? numeric : 4;
+    }
+    const neighborId = makeNodeId(nextHop);
+    const iface = sourceMeta.interfaces.find((entry) => entry?.neighbor && makeNodeId(entry.neighbor) === neighborId);
+    if (!iface) {
+        return 4;
+    }
+    const capacity = Number(iface.sendBuffer?.capacity ?? iface.sendCapacity);
+    return Number.isFinite(capacity) && capacity > 0 ? capacity : 4;
 }
 
 function syncAutoNodeDetailsControl() {
@@ -803,11 +1100,15 @@ function summarizeInterfaceRuntime(ifaceRuntime) {
     const outboundRep = pickRepresentativePacket(outbound);
     const inboundRep = pickRepresentativePacket(inbound);
 
+    const capacity = Number(ifaceRuntime.sendBuffer.capacity || 0);
     ifaceRuntime.sendBuffer.used = outbound.length;
     ifaceRuntime.sendBuffer.state = outbound.length
         ? SEND_BUFFER_STATE_BY_STAGE[outboundRep?.stage] || 'transferring'
         : 'idle';
     ifaceRuntime.sendBuffer.head = outboundRep?.packet || null;
+    const overflow = Math.max(outbound.length - capacity, 0);
+    const existingQueue = Number(ifaceRuntime.sendBuffer.queue || 0);
+    ifaceRuntime.sendBuffer.queue = Math.max(existingQueue, overflow);
 
     ifaceRuntime.receiveBuffer.used = inbound.length;
     ifaceRuntime.receiveBuffer.state = inbound.length
@@ -925,17 +1226,20 @@ function resolveBufferSnapshot(metaSnapshot, runtimeSnapshot) {
             capacity: 0,
             head: null,
             state: null,
+            queue: 0,
         };
     }
     const used = Number(runtimeSnapshot?.used ?? metaSnapshot?.used ?? 0) || 0;
     const capacity = Number(runtimeSnapshot?.capacity ?? metaSnapshot?.capacity ?? 0) || 0;
     const head = runtimeSnapshot?.head ?? metaSnapshot?.head ?? null;
     const state = runtimeSnapshot?.state ?? metaSnapshot?.state ?? null;
+    const queue = Number(runtimeSnapshot?.queue ?? metaSnapshot?.queue ?? 0) || 0;
     return {
         used,
         capacity,
         head,
         state,
+        queue,
     };
 }
 
@@ -945,6 +1249,7 @@ function describeBufferSnapshot(snapshot) {
     }
     const used = Number(snapshot.used ?? 0);
     const capacity = Number(snapshot.capacity ?? 0);
+    const queue = Number(snapshot.queue ?? 0);
     const primary = capacity
         ? `${used} / ${capacity} slot${capacity === 1 ? '' : 's'}`
         : `${used} slot${used === 1 ? '' : 's'}`;
@@ -958,6 +1263,9 @@ function describeBufferSnapshot(snapshot) {
         parts.push(`State: ${stateLabel}`);
     }
     parts.push(headText);
+    if (queue > 0) {
+        parts.push(`Queued: ${queue}`);
+    }
     const secondary = parts.filter(Boolean).join(' · ');
     return { primary, secondary };
 }
@@ -1050,6 +1358,17 @@ function renderNodeLogicSection(meta, runtime) {
         Number.isFinite(logicApp) ? logicApp : 0,
         Number.isFinite(metaApp) ? metaApp : 0,
     );
+    const queueStats = runtimeInterfaces.reduce((acc, ifaceRuntime) => {
+        if (!ifaceRuntime) {
+            return acc;
+        }
+        const sendBuffer = ifaceRuntime.sendBuffer || {};
+        acc.waiting += Number(sendBuffer.queue || 0);
+        acc.active += Number(sendBuffer.used || 0);
+        return acc;
+    }, { waiting: 0, active: 0 });
+    const totalQueued = queueStats.waiting;
+    const totalActive = queueStats.active;
 
     const entries = [
         {
@@ -1064,6 +1383,19 @@ function renderNodeLogicSection(meta, runtime) {
                 ? `${bufferedPackets} packet${bufferedPackets === 1 ? '' : 's'} staged`
                 : 'Application buffer empty',
             secondary: `Buffered: ${bufferedPackets}`,
+        },
+        {
+            label: 'Queues',
+            primary: totalQueued > 0
+                ? `${totalQueued} packet${totalQueued === 1 ? '' : 's'} waiting`
+                : (totalActive > 0
+                    ? `${totalActive} packet${totalActive === 1 ? '' : 's'} in transfer`
+                    : 'Queues empty'),
+            secondary: (totalQueued > 0 && totalActive > 0)
+                ? `Waiting: ${totalQueued} · Active: ${totalActive}`
+                : totalActive > 0
+                    ? `Active: ${totalActive}`
+                    : (totalQueued > 0 ? `Waiting: ${totalQueued}` : null),
         },
         {
             label: 'Control',
@@ -1386,17 +1718,20 @@ function updateNodePanelContent() {
         const snapshot = resolveBufferSnapshot(iface?.[key], runtimeOverlay?.[key]);
         acc.used += Number(snapshot.used || 0);
         acc.capacity += Number(snapshot.capacity || 0);
+        acc.queue += Number(snapshot.queue || 0);
         return acc;
-    }, { used: 0, capacity: 0 });
+    }, { used: 0, capacity: 0, queue: 0 });
 
     const sendTotals = aggregateBuffers('sendBuffer');
     const recvTotals = aggregateBuffers('receiveBuffer');
     const formatTotal = (totals) => {
-        const { used, capacity } = totals;
+        const { used, capacity, queue } = totals;
         if (capacity > 0) {
-            return `${used} / ${capacity} slot${capacity === 1 ? '' : 's'}`;
+            const queueText = queue > 0 ? ` · Queue: ${queue}` : '';
+            return `${used} / ${capacity} slot${capacity === 1 ? '' : 's'}${queueText}`;
         }
-        return `${used} slot${used === 1 ? '' : 's'}`;
+        const queueText = queue > 0 ? ` · Queue: ${queue}` : '';
+        return `${used} slot${used === 1 ? '' : 's'}${queueText}`;
     };
 
     updateBufferChip(nodePanelSendBuffer, runtime.sendBuffer, formatTotal(sendTotals));
@@ -1406,11 +1741,15 @@ function updateNodePanelContent() {
     const appCount = Number(appBuffer.count || 0);
     const runtimeAppCount = Number(runtime.applicationBuffer || 0);
     const appState = appCount > 0 || runtimeAppCount > 0 ? 'ready' : 'idle';
-    const appDisplayCount = appCount > 0 ? appCount : runtimeAppCount;
+    const appDisplayCount = Math.max(appCount, runtimeAppCount);
+    const queueTotal = Number(sendTotals.queue || 0);
+    const appText = queueTotal > 0
+        ? `${appDisplayCount} ${appDisplayCount === 1 ? 'packet' : 'packets'} · Queue: ${queueTotal}`
+        : `${appDisplayCount} ${appDisplayCount === 1 ? 'packet' : 'packets'}`;
     updateBufferChip(
         nodePanelAppBuffer,
         appState,
-        `${appDisplayCount} ${appDisplayCount === 1 ? 'packet' : 'packets'}`,
+        appText,
     );
 
     let assertedSignals = 0;
@@ -1489,51 +1828,76 @@ function handleCanvasNodeClick(nodeId) {
         closeNodePanel();
         return;
     }
-    if (pickMode === 'source') {
-        const meta = nodeMeta.get(nodeId) || parseSelectValue(nodeId);
-        if (setSelectValue(sourceSelect, nodeId)) {
-            handleSourceSelectChange({
-                announce: true,
-                message: `Source set to ${nodeLabel(meta)} via canvas.`,
-            });
-        } else {
-            selectNode(nodeId);
-        }
-        setPickMode(null);
-        return;
-    }
-    if (pickMode === 'destination') {
+    if (pickMode) {
         const meta = nodeMeta.get(nodeId) || parseSelectValue(nodeId);
         const labelText = safeNodeLabel(meta);
-        const mode = getSimulationMode();
-        if (mode === 'parallel') {
-            let applied = false;
-            if (destinationCandidateSelect) {
-                applied = setSelectValue(destinationCandidateSelect, nodeId);
+        if (pickMode.rowId) {
+            const route = nmRoutes.find((entry) => entry.id === pickMode.rowId);
+            if (route) {
+                const targetSelect = pickMode.type === 'source' ? route.sourceSelect : route.destSelect;
+                if (targetSelect) {
+                    populateSelectElementFromCache(targetSelect, nodeId);
+                    setSelectValue(targetSelect, nodeId);
+                    if (hudStatus) {
+                        hudStatus.textContent = `${pickMode.type === 'source' ? 'Source' : 'Destination'} set to ${labelText}.`;
+                    }
+                    focusNode(nodeId, {
+                        auto: nodePanelAutoTracking,
+                        openPanelOnFocus: false,
+                    });
+                    renderTopology();
+                }
             }
-            if (!applied && destinationSelect) {
-                applied = setSelectValue(destinationSelect, nodeId);
-            }
-            if (hudStatus) {
-                hudStatus.textContent = applied
-                    ? `Candidate destination set to ${labelText}. Press + to add to the list.`
-                    : `Candidate destination ${labelText} ready.`;
-            }
-            focusNode(nodeId, {
-                auto: nodePanelAutoTracking,
-                openPanelOnFocus: true,
-            });
-            renderTopology();
-        } else if (setSelectValue(destinationSelect, nodeId)) {
-            handleDestinationSelectChange({
-                announce: true,
-                message: `Destination set to ${labelText} via canvas.`,
-            });
-        } else {
-            selectNode(nodeId);
+            setPickMode(null);
+            return;
         }
-        setPickMode(null);
-        return;
+        if (pickMode.type === 'source') {
+            if (setSelectValue(sourceSelect, nodeId)) {
+                handleSourceSelectChange({
+                    announce: true,
+                    message: `Source set to ${nodeLabel(meta)} via canvas.`,
+                    openNodeDetails: false,
+                });
+            } else {
+                focusNode(nodeId, {
+                    auto: nodePanelAutoTracking,
+                    openPanelOnFocus: false,
+                });
+                renderTopology();
+            }
+            setPickMode(null);
+            return;
+        }
+        if (pickMode.type === 'destination') {
+            const mode = getSimulationMode();
+            if (mode === 'parallel') {
+                if (destinationCandidateSelect) {
+                    const needsChange = destinationCandidateSelect.value !== nodeId;
+                    const updated = setSelectValue(destinationCandidateSelect, nodeId);
+                    suppressCandidateSelectChange = Boolean(updated && needsChange);
+                }
+                const added = addMultiDestination(nodeId);
+                if (!added && hudStatus && !hudStatus.textContent) {
+                    hudStatus.textContent = `Destination ${labelText} could not be added.`;
+                }
+                return;
+            }
+            if (setSelectValue(destinationSelect, nodeId)) {
+                handleDestinationSelectChange({
+                    announce: true,
+                    message: `Destination set to ${labelText} via canvas.`,
+                    openNodeDetails: false,
+                });
+            } else {
+                focusNode(nodeId, {
+                    auto: nodePanelAutoTracking,
+                    openPanelOnFocus: false,
+                });
+                renderTopology();
+            }
+            setPickMode(null);
+            return;
+        }
     }
     selectNode(nodeId);
 }
@@ -1648,7 +2012,7 @@ function renderMultiRouteList() {
 
     const title = document.createElement('p');
     title.className = 'flow-entry__phase';
-    title.textContent = 'Parallel routes';
+    title.textContent = multiRunState.mode === 'nm' ? 'n → m routes' : 'Parallel routes';
     multiRouteList.appendChild(title);
 
     const fragment = document.createDocumentFragment();
@@ -1656,6 +2020,7 @@ function renderMultiRouteList() {
     const activeIndex = typeof multiRunState.selectedIndex === 'number'
         ? multiRunState.selectedIndex
         : 0;
+    const isNmMode = multiRunState.mode === 'nm';
 
     multiRunState.payloads.forEach((payload, index) => {
         const card = document.createElement('article');
@@ -1672,7 +2037,11 @@ function renderMultiRouteList() {
             card.style.opacity = '0.65';
         }
 
-        if (multiRunState.mode === 'parallel') {
+        if (payload.color) {
+            card.style.borderLeft = `4px solid ${payload.color}`;
+        }
+
+        if (multiRunState.mode === 'parallel' || multiRunState.mode === 'nm') {
             card.setAttribute('role', 'button');
             card.tabIndex = 0;
             card.style.cursor = 'pointer';
@@ -1688,21 +2057,55 @@ function renderMultiRouteList() {
         const pathArray = Array.isArray(payload.path) ? payload.path : [];
         const startNode = pathArray[0] || multiRunState.source || payload.source;
         const endNode = pathArray[pathArray.length - 1] || payload.destination || startNode;
-        const packetLabel = payload.packetIndex ? `Packet ${payload.packetIndex}` : `Packet ${index + 1}`;
-        titleEl.textContent = `${packetLabel}: ${safeNodeLabel(startNode)} → ${safeNodeLabel(endNode)}`;
+        const labelPrefix = isNmMode
+            ? `Route ${payload.routeIndex != null ? payload.routeIndex + 1 : index + 1}`
+            : `Packet ${payload.packetIndex || index + 1}`;
+        titleEl.textContent = `${labelPrefix}: ${safeNodeLabel(startNode)} → ${safeNodeLabel(endNode)}`;
         card.appendChild(titleEl);
 
         const details = document.createElement('ul');
         details.className = 'flow-entry__details';
-        const packetCountItem = document.createElement('li');
-        const packetCount = payload.packetCount || multiRunState.payloads.length;
-        packetCountItem.textContent = `${packetLabel} of ${packetCount}`;
-        details.appendChild(packetCountItem);
+        if (!isNmMode) {
+            const packetCountItem = document.createElement('li');
+            const packetCount = payload.packetCount || multiRunState.payloads.length;
+            packetCountItem.textContent = `${labelPrefix} of ${packetCount}`;
+            details.appendChild(packetCountItem);
+        } else {
+            const summaryEntry = multiRunState.routeQueueSummary instanceof Map
+                ? multiRunState.routeQueueSummary.get(payload.routeIndex)
+                : multiRunState.routeQueueSummary?.[payload.routeIndex] || null;
+            const totalPackets = payload.packetBatches || 1;
+            const activeCount = summaryEntry ? summaryEntry.active : Math.min(payload.bufferCapacity || totalPackets, totalPackets);
+            const waitingCount = summaryEntry ? summaryEntry.waiting : Math.max(totalPackets - activeCount, 0);
+            const deliveredCount = summaryEntry ? summaryEntry.delivered : 0;
+
+            const totalItem = document.createElement('li');
+            totalItem.textContent = `Total packets: ${totalPackets}`;
+            details.appendChild(totalItem);
+
+            const activeItem = document.createElement('li');
+            activeItem.textContent = `In buffer: ${activeCount}`;
+            details.appendChild(activeItem);
+
+            const queueItem = document.createElement('li');
+            queueItem.textContent = `Queue: ${waitingCount}`;
+            details.appendChild(queueItem);
+
+            const deliveredItem = document.createElement('li');
+            deliveredItem.textContent = `Delivered: ${deliveredCount}`;
+            details.appendChild(deliveredItem);
+
+            if (Number.isFinite(payload.bufferCapacity)) {
+                const bufferItem = document.createElement('li');
+                bufferItem.textContent = `Send buffer capacity: ${payload.bufferCapacity}`;
+                details.appendChild(bufferItem);
+            }
+        }
         const hopItem = document.createElement('li');
         hopItem.textContent = `Hop count: ${payload.hopCount ?? 0}`;
         details.appendChild(hopItem);
 
-        if (multiRunState.mode === 'parallel' && !isCompleted) {
+        if ((multiRunState.mode === 'parallel' || multiRunState.mode === 'nm') && !isCompleted) {
             const hintItem = document.createElement('li');
             hintItem.textContent = 'Click to preview';
             details.appendChild(hintItem);
@@ -1724,6 +2127,8 @@ function handleMultiRouteListClick(event) {
     if (Number.isNaN(index)) return;
     if (multiRunState.mode === 'parallel') {
         focusParallelRoute(index);
+    } else if (multiRunState.mode === 'nm') {
+        focusNmRoute(index);
     }
 }
 
@@ -1736,11 +2141,13 @@ function handleMultiRouteListKeydown(event) {
     if (Number.isNaN(index)) return;
     if (multiRunState.mode === 'parallel') {
         focusParallelRoute(index);
+    } else if (multiRunState.mode === 'nm') {
+        focusNmRoute(index);
     }
 }
 
 function ensureParallelCompletionSet() {
-    if (!multiRunState || multiRunState.mode !== 'parallel') {
+    if (!multiRunState || (multiRunState.mode !== 'parallel' && multiRunState.mode !== 'nm')) {
         return null;
     }
     if (!(multiRunState.completed instanceof Set)) {
@@ -1749,48 +2156,114 @@ function ensureParallelCompletionSet() {
     return multiRunState.completed;
 }
 
-function updateParallelRouteProgress(statuses = []) {
+function updateParallelRouteProgress(statuses = [], contexts = []) {
     const completedSet = ensureParallelCompletionSet();
-    if (!completedSet) return;
+    if (!completedSet || !multiRunState) return;
+
+    if (!Array.isArray(multiRunState.completedRoutes)) {
+        multiRunState.completedRoutes = [];
+    }
+    if (!Array.isArray(multiRunState.completedStatuses)) {
+        multiRunState.completedStatuses = [];
+    }
+
+    const isNmMode = multiRunState.mode === 'nm';
+    const routeSummary = multiRunState.routeQueueSummary || null;
     let changed = false;
+
+    function markRouteComplete(routeIndex, statusOverride = null) {
+        if (!Number.isFinite(routeIndex) || completedSet.has(routeIndex)) {
+            return false;
+        }
+
+        const payload = Array.isArray(multiRunState.payloads)
+            ? multiRunState.payloads[routeIndex]
+            : null;
+        let completedStatus = statusOverride;
+        if (!completedStatus && payload) {
+            completedStatus = buildCompletedStatusFromPayload(payload);
+        }
+        if (!completedStatus) {
+            completedStatus = {
+                hopText: '0 / 0',
+                nodesText: 'Route delivered',
+                phaseKey: 'completed',
+                phaseLabel: 'Completed',
+                signalText: 'Idle',
+                signalStates: { req: 'sleep', ack: 'sleep', data: 'sleep' },
+                transferText: isNmMode ? 'Route delivered' : 'Packet delivered',
+                progressPercent: 100,
+                timer: 0,
+            };
+        }
+
+        completedSet.add(routeIndex);
+        multiRunState.completedStatuses[routeIndex] = {
+            ...completedStatus,
+            signalStates: {
+                ...(completedStatus.signalStates || {}),
+            },
+        };
+
+        if (payload) {
+            multiRunState.completedRoutes[routeIndex] = new RoutePreview(payload, {
+                renderStyle: 'completed',
+                strokeOpacity: 0.95,
+                lineWidth: 4,
+            });
+        }
+
+        if (Array.isArray(multiRunState.previewRoutes) && multiRunState.previewRoutes[routeIndex]) {
+            multiRunState.previewRoutes[routeIndex].renderStyle = 'completed';
+            multiRunState.previewRoutes[routeIndex].strokeOpacity = Math.max(
+                multiRunState.previewRoutes[routeIndex].strokeOpacity || 0.85,
+                0.85,
+            );
+        }
+        return true;
+    }
 
     statuses.forEach((status, index) => {
         if (!status) return;
-        const isCompleted = status.phaseKey === 'completed' || status.phaseLabel === 'Completed';
-        if (isCompleted && !completedSet.has(index)) {
-            completedSet.add(index);
-            changed = true;
-            if (!Array.isArray(multiRunState.completedRoutes)) {
-                multiRunState.completedRoutes = [];
+        const context = Array.isArray(contexts) ? contexts[index] || {} : {};
+        const contextIndex = Number.isFinite(context.routeIndex) ? context.routeIndex : index;
+        const routeIndex = Number.isFinite(contextIndex) ? contextIndex : index;
+
+        if (isNmMode) {
+            const summaryEntry = routeSummary instanceof Map
+                ? routeSummary.get(routeIndex)
+                : routeSummary?.[routeIndex];
+            const totalPackets = Number(summaryEntry?.total || 0);
+            const deliveredPackets = Number(summaryEntry?.delivered || 0);
+            if (totalPackets > 0 && deliveredPackets >= totalPackets) {
+                if (markRouteComplete(routeIndex)) {
+                    changed = true;
+                }
             }
-            if (!Array.isArray(multiRunState.completedStatuses)) {
-                multiRunState.completedStatuses = [];
-            }
-            multiRunState.completedStatuses[index] = {
-                ...status,
-                signalStates: {
-                    ...(status.signalStates || {}),
-                },
-            };
-            const payload = Array.isArray(multiRunState.payloads)
-                ? multiRunState.payloads[index]
-                : null;
-            if (payload) {
-                multiRunState.completedRoutes[index] = new RoutePreview(payload, {
-                    renderStyle: 'completed',
-                    strokeOpacity: 0.95,
-                    lineWidth: 4,
-                });
-            }
-            if (Array.isArray(multiRunState.previewRoutes) && multiRunState.previewRoutes[index]) {
-                multiRunState.previewRoutes[index].renderStyle = 'completed';
-                multiRunState.previewRoutes[index].strokeOpacity = Math.max(
-                    multiRunState.previewRoutes[index].strokeOpacity || 0.85,
-                    0.85,
-                );
+        } else {
+            const isCompleted = status.phaseKey === 'completed' || status.phaseLabel === 'Completed';
+            if (isCompleted && markRouteComplete(routeIndex, status)) {
+                changed = true;
             }
         }
     });
+
+    if (isNmMode && routeSummary) {
+        const entries = routeSummary instanceof Map
+            ? Array.from(routeSummary.entries())
+            : Object.entries(routeSummary);
+        entries.forEach(([key, summary]) => {
+            const routeIndex = Number(key);
+            if (!Number.isFinite(routeIndex)) return;
+            const totalPackets = Number(summary?.total || 0);
+            const deliveredPackets = Number(summary?.delivered || 0);
+            if (totalPackets > 0 && deliveredPackets >= totalPackets) {
+                if (markRouteComplete(routeIndex)) {
+                    changed = true;
+                }
+            }
+        });
+    }
 
     if (changed) {
         renderMultiRouteList();
@@ -1812,6 +2285,7 @@ function buildCompletedStatusFromPayload(payload) {
             || payload?.packet?.destination
             || payload?.destination
             || startNode;
+    const transferText = multiRunState?.mode === 'nm' ? 'Route delivered' : 'Packet delivered';
 
     return {
         hopText: totalHops > 0 ? `${totalHops} / ${totalHops}` : '0 / 0',
@@ -1822,7 +2296,7 @@ function buildCompletedStatusFromPayload(payload) {
         phaseLabel: 'Completed',
         signalText: 'Idle',
         signalStates: { req: 'sleep', ack: 'sleep', data: 'sleep' },
-        transferText: 'Packet delivered',
+        transferText,
         progressPercent: 100,
         timer: 0,
     };
@@ -1870,6 +2344,64 @@ function focusParallelRoute(index) {
         contextHint: isCompleted
             ? 'Packet delivered. Click "Animate all" to replay the batch.'
             : 'Preview loaded. Click "Animate all" to start simultaneous transfer.',
+        buttonLabel: 'Animate all',
+        previewColors,
+        initialStatus,
+        previewStyle: isCompleted ? 'completed' : 'active',
+        isCompleted,
+    });
+
+    lastRoutePayload = payload;
+    updateAnimateButton({
+        disabled: !payload?.segments?.length,
+        busy: false,
+        label: 'Animate all',
+    });
+}
+
+function focusNmRoute(index) {
+    if (!multiRunState || multiRunState.mode !== 'nm') return;
+    if (!Array.isArray(multiRunState.payloads) || index < 0 || index >= multiRunState.payloads.length) {
+        return;
+    }
+
+    multiRunState.selectedIndex = index;
+    renderMultiRouteList();
+    highlightMultiRouteCard(index);
+
+    const payload = multiRunState.payloads[index];
+    const completedSet = ensureParallelCompletionSet();
+    const previewEntry = Array.isArray(multiRunState.previewRoutes)
+        ? multiRunState.previewRoutes[index]
+        : null;
+    const isCompleted = Boolean(completedSet?.has(index) || previewEntry?.renderStyle === 'completed');
+    const storedStatus = Array.isArray(multiRunState.completedStatuses)
+        ? multiRunState.completedStatuses[index]
+        : null;
+    const previewColors = previewEntry
+        ? {
+            treeColor: previewEntry.treeColor || payload.color,
+            ringColor: previewEntry.ringColor || payload.color,
+            strokeOpacity: 0.9,
+            lineWidth: 4,
+        }
+        : null;
+    const initialStatus = isCompleted
+        ? storedStatus
+            ? {
+                ...storedStatus,
+                signalStates: {
+                    ...(storedStatus.signalStates || {}),
+                },
+            }
+            : buildCompletedStatusFromPayload(payload)
+        : null;
+
+    prepareRoute(payload, {
+        contextLabel: `Route ${index + 1} of ${multiRunState.payloads.length}`,
+        contextHint: isCompleted
+            ? 'Route delivered. Click "Animate all" to replay the plan.'
+            : 'Preview loaded. Click "Animate all" to execute the full n → m plan.',
         buttonLabel: 'Animate all',
         previewColors,
         initialStatus,
@@ -1970,51 +2502,118 @@ function setRouteInfo(payload) {
 }
 
 function updateAnimateButton({ disabled, busy = false, label } = {}) {
-    if (!animateBtn) return;
-    if (typeof disabled === 'boolean') {
-        animateBtn.disabled = disabled;
+    const defaultLabel = animateBtn?.dataset?.defaultLabel || 'Animate path';
+    const startDefaultLabel = 'Start animation';
+    const currentAnimateLabel = animateBtn?.dataset?.currentLabel;
+    let startLabel = label;
+    if (!startLabel) {
+        if (currentAnimateLabel && currentAnimateLabel !== defaultLabel) {
+            startLabel = currentAnimateLabel;
+        } else {
+            startLabel = startDefaultLabel;
+        }
     }
-    if (label) {
-        animateBtn.dataset.currentLabel = label;
-    } else if (!animateBtn.dataset.currentLabel) {
-        animateBtn.dataset.currentLabel = animateBtn.dataset.defaultLabel || 'Animate path';
+
+    if (animateBtn) {
+        if (typeof disabled === 'boolean') {
+            animateBtn.disabled = disabled;
+        }
+        if (label) {
+            animateBtn.dataset.currentLabel = label;
+        } else if (!animateBtn.dataset.currentLabel) {
+            animateBtn.dataset.currentLabel = defaultLabel;
+        }
+        const currentLabel = animateBtn.dataset.currentLabel || defaultLabel;
+        animateBtn.textContent = busy ? 'Animating…' : currentLabel;
     }
-    const currentLabel = animateBtn.dataset.currentLabel || animateBtn.dataset.defaultLabel || 'Animate path';
-    animateBtn.textContent = busy ? 'Animating…' : currentLabel;
+
+    if (playPauseAnimationBtn) {
+        if (typeof disabled === 'boolean' && !animationState) {
+            playPauseAnimationBtn.disabled = disabled;
+        }
+        if (!animationState) {
+            const ariaLabel = busy ? 'Preparing animation' : (startLabel || startDefaultLabel);
+            playPauseAnimationBtn.setAttribute('aria-label', ariaLabel);
+            playPauseAnimationBtn.title = ariaLabel;
+            playPauseAnimationBtn.dataset.state = 'play';
+        }
+    }
 }
 
-function hasRouteReadyForRestart() {
-    const parallelReady = Boolean(
-        multiRunState
-        && multiRunState.mode === 'parallel'
-        && Array.isArray(multiRunState.payloads)
-        && multiRunState.payloads.some((payload) => Array.isArray(payload?.segments) && payload.segments.length),
-    );
-    if (parallelReady) {
-        return true;
+function openSpeedMenu() {
+    if (!speedMenuBtn || !speedMenuPopover) {
+        return;
     }
-    return Boolean(
-        lastRoutePayload
-        && Array.isArray(lastRoutePayload.segments)
-        && lastRoutePayload.segments.length,
-    );
+    speedMenuPopover.hidden = false;
+    speedMenuBtn.setAttribute('aria-expanded', 'true');
+    speedMenuOpen = true;
+    if (speedControl) {
+        requestAnimationFrame(() => {
+            speedControl.focus();
+        });
+    }
+}
+
+function closeSpeedMenu({ focusButton = false } = {}) {
+    if (!speedMenuBtn || !speedMenuPopover) {
+        return;
+    }
+    if (speedMenuPopover.hidden) {
+        if (speedMenuBtn.getAttribute('aria-expanded') !== 'false') {
+            speedMenuBtn.setAttribute('aria-expanded', 'false');
+        }
+        speedMenuOpen = false;
+        return;
+    }
+    speedMenuPopover.hidden = true;
+    speedMenuBtn.setAttribute('aria-expanded', 'false');
+    speedMenuOpen = false;
+    if (focusButton) {
+        speedMenuBtn.focus();
+    }
+}
+
+function toggleSpeedMenu() {
+    if (!speedMenuBtn || !speedMenuPopover) {
+        return;
+    }
+    if (speedMenuPopover.hidden) {
+        openSpeedMenu();
+    } else {
+        closeSpeedMenu();
+    }
 }
 
 function updateAnimationControlState() {
-    if (pauseAnimationBtn) {
+    if (playPauseAnimationBtn) {
         const isRunning = Boolean(animationState);
-        const label = animationPaused ? 'Resume animation' : 'Pause animation';
-        pauseAnimationBtn.disabled = !isRunning;
-        pauseAnimationBtn.textContent = animationPaused ? '▶' : '⏸';
-        pauseAnimationBtn.title = label;
-        pauseAnimationBtn.setAttribute('aria-label', label);
-        pauseAnimationBtn.setAttribute('aria-pressed', animationPaused ? 'true' : 'false');
+        const isActive = isRunning && !animationPaused;
+        const label = !isRunning
+            ? 'Start animation'
+            : animationPaused
+                ? 'Resume animation'
+                : 'Pause animation';
+        const state = isActive ? 'pause' : 'play';
+        playPauseAnimationBtn.dataset.state = state;
+        playPauseAnimationBtn.title = label;
+        playPauseAnimationBtn.setAttribute('aria-label', label);
+        playPauseAnimationBtn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+        if (isRunning) {
+            playPauseAnimationBtn.disabled = false;
+        }
+        playPauseAnimationBtn.classList.toggle('is-active', isActive);
+        if (!isRunning) {
+            playPauseAnimationBtn.dataset.state = 'play';
+        }
     }
     if (restartAnimationBtn) {
-        const routeReady = hasRouteReadyForRestart();
-        restartAnimationBtn.disabled = !routeReady;
-        restartAnimationBtn.title = routeReady ? 'Restart animation' : 'Restart animation (unavailable)';
-        restartAnimationBtn.setAttribute('aria-label', 'Restart animation');
+        restartAnimationBtn.disabled = false;
+        restartAnimationBtn.title = 'Reset simulation';
+        restartAnimationBtn.setAttribute('aria-label', 'Reset simulation');
+        const srRestartLabel = restartAnimationBtn.querySelector('.sr-only');
+        if (srRestartLabel) {
+            srRestartLabel.textContent = 'Reset simulation';
+        }
     }
 }
 
@@ -2068,17 +2667,10 @@ function togglePauseAnimation() {
 }
 
 function restartAnimation() {
-    if (!hasRouteReadyForRestart()) {
-        if (hudStatus) {
-            hudStatus.textContent = 'Nothing to restart yet. Run a simulation first.';
-        }
-        return;
+    resetSimulation();
+    if (hudStatus) {
+        hudStatus.textContent = 'Simulation reset';
     }
-    stopAnimation();
-    animationPaused = false;
-    animationPauseTimestamp = null;
-    playAnimation();
-    updateAnimationControlState();
 }
 
 function ingestTopologyPayload(data, { resetView = true } = {}) {
@@ -2143,6 +2735,8 @@ function populateNodeSelects() {
         }))
         .sort((a, b) => a.value.localeCompare(b.value));
 
+    nodeOptionsCache = options;
+
     [sourceSelect, destinationSelect].forEach((select, idx) => {
         if (!select) return;
 
@@ -2203,6 +2797,8 @@ function populateNodeSelects() {
     if (removedAny || (multiDestinationList && !multiDestinationList.children.length)) {
         renderMultiDestinationList();
     }
+
+    refreshNmRouteOptions();
 }
 
 function fetchTopology() {
@@ -2257,6 +2853,13 @@ function drawNodes(layout) {
     const mode = getSimulationMode();
     const highlightMulti = mode === 'parallel';
     const multiDestinationSet = highlightMulti ? new Set(multiDestinations) : null;
+    const highlightNm = mode === 'nm';
+    const nmSourceSet = highlightNm
+        ? new Set(nmRoutes.map((route) => route.sourceId).filter(Boolean))
+        : null;
+    const nmDestinationSet = highlightNm
+        ? new Set(nmRoutes.map((route) => route.destinationId).filter(Boolean))
+        : null;
     topologyData.nodes.forEach((node) => {
         const nodeId = makeNodeId(node);
         const pos = getNodePosition(node.ring, node.index, layout);
@@ -2268,12 +2871,15 @@ function drawNodes(layout) {
         const isDestination = highlightMulti
             ? multiDestinationSet.has(nodeId)
             : nodeId === currentDestinationId;
+        const isNmSource = highlightNm && nmSourceSet?.has(nodeId);
+        const isNmDestination = highlightNm && nmDestinationSet?.has(nodeId);
         let fillColor = colors.node;
-        if (isSource && isDestination) {
+        const combinedSource = (isSource || isNmSource) && (isDestination || isNmDestination);
+        if (combinedSource) {
             fillColor = colors.sharedNode;
-        } else if (isSource) {
+        } else if (isSource || isNmSource) {
             fillColor = colors.sourceNode;
-        } else if (isDestination) {
+        } else if (isDestination || isNmDestination) {
             fillColor = colors.destinationNode;
         }
         if (isSelected) {
@@ -2725,9 +3331,16 @@ function renderTopology() {
     nodePositions.clear();
     drawNodes(layoutCache);
     if (animationState) {
-        if (animationState.mode === 'parallel' && Array.isArray(animationState.animations)) {
+        if ((animationState.mode === 'parallel' || animationState.mode === 'nm') && Array.isArray(animationState.animations)) {
             animationState.animations.forEach((animation, index) => {
-                const color = PARALLEL_ROUTE_COLORS[index % PARALLEL_ROUTE_COLORS.length];
+                const routeIndex = Number.isFinite(animation?.routeIndex)
+                    ? animation.routeIndex
+                    : index;
+                const routePayload = Array.isArray(multiRunState?.payloads)
+                    ? multiRunState.payloads[routeIndex]
+                    : null;
+                const color = routePayload?.color
+                    || PARALLEL_ROUTE_COLORS[index % PARALLEL_ROUTE_COLORS.length];
                 const status = Array.isArray(animationState.latestStatuses)
                     ? animationState.latestStatuses[index]
                     : null;
@@ -2938,23 +3551,293 @@ class RouteAnimation {
 }
 
 class ParallelRouteController {
-    constructor(payloads, speed) {
-        this.mode = 'parallel';
-        this.payloads = payloads;
-        this.animations = payloads.map((payload) => new RouteAnimation(payload, speed));
+    constructor(payloads, speed, options = {}) {
+        this.mode = options.mode === 'nm' ? 'nm' : 'parallel';
+        this.speed = speed;
+        this.payloads = Array.isArray(payloads) ? payloads : [];
+        this.queueConfig = options.queueConfig instanceof Map
+            ? new Map(options.queueConfig)
+            : options.queueConfig && typeof options.queueConfig === 'object'
+                ? new Map(Object.entries(options.queueConfig))
+                : new Map();
+        this.routeSummary = options.routeSummary instanceof Map
+            ? options.routeSummary
+            : options.routeSummary && typeof options.routeSummary === 'object'
+                ? new Map(Object.entries(options.routeSummary))
+                : null;
         this.latestStatuses = [];
-    }
+        this.activeEntries = [];
+        this.queueState = new Map();
+        this.allEntries = [];
+        this.sourceQueues = new Map();
 
-    update(timestamp) {
-        this.animations.forEach((animation) => {
-            animation.update(timestamp);
+        this.queueConfig.forEach((config, key) => {
+            if (!config || !config.sourceId) return;
+            if (!this.sourceQueues.has(config.sourceId)) {
+                this.sourceQueues.set(config.sourceId, new Set());
+            }
+            this.sourceQueues.get(config.sourceId).add(key);
+        });
+
+        this.payloads.forEach((payload, index) => {
+            this.registerPayload(payload, index);
         });
     }
 
-    isComplete() {
-        return this.animations.every((animation) => animation.isComplete());
+    get animations() {
+        return this.activeEntries.map((entry) => entry.animation);
     }
 
+    getActiveEntries() {
+        return this.activeEntries.slice();
+    }
+
+    resolveQueueKey(payload, index) {
+        if (payload && typeof payload.queueKey === 'string') {
+            return payload.queueKey;
+        }
+        if (payload && Number.isFinite(payload.routeIndex)) {
+            return `route-${payload.routeIndex}`;
+        }
+        return `payload-${index}`;
+    }
+
+    ensureQueueState(queueKey, payload) {
+        if (!this.queueState.has(queueKey)) {
+            const config = this.queueConfig.get(queueKey) || {};
+            let capacity = Number.isFinite(config.capacity) ? config.capacity : null;
+            if (!Number.isFinite(capacity) || capacity <= 0) {
+                capacity = Number.isFinite(payload?.bufferCapacity) && payload.bufferCapacity > 0
+                    ? payload.bufferCapacity
+                    : 1;
+            }
+            this.queueState.set(queueKey, {
+                capacity: Math.max(1, Math.trunc(capacity)),
+                active: [],
+                waiting: [],
+                routeIndex: Number.isFinite(payload?.routeIndex) ? payload.routeIndex : null,
+            });
+        }
+        return this.queueState.get(queueKey);
+    }
+
+    registerPayload(payload, index) {
+        const queueKey = this.resolveQueueKey(payload, index);
+        const animation = new RouteAnimation(payload, this.speed);
+        const routeIndex = Number.isFinite(payload?.routeIndex) ? payload.routeIndex : index;
+        animation.routeIndex = routeIndex;
+        animation.queueKey = queueKey;
+        const entry = {
+            animation,
+            payload,
+            queueKey,
+            routeIndex,
+            active: false,
+        };
+        this.allEntries.push(entry);
+
+        const shouldQueue = this.mode === 'nm' || this.queueConfig.has(queueKey);
+        if (shouldQueue) {
+            const state = this.ensureQueueState(queueKey, payload);
+            if (state.active.length < state.capacity) {
+                this.startEntry(entry, { initial: true });
+            } else {
+                this.queueEntry(entry);
+            }
+            this.applyQueueState(queueKey);
+        } else {
+            this.activateDirect(entry);
+        }
+    }
+
+    activateDirect(entry) {
+        entry.active = true;
+        this.activeEntries.push(entry);
+    }
+
+    queueEntry(entry) {
+        const state = this.ensureQueueState(entry.queueKey, entry.payload);
+        state.waiting.push(entry);
+        entry.active = false;
+    }
+
+    startEntry(entry, { initial = false } = {}) {
+        const state = this.ensureQueueState(entry.queueKey, entry.payload);
+        if (!state.active.includes(entry)) {
+            state.active.push(entry);
+        }
+        if (!this.activeEntries.includes(entry)) {
+            this.activeEntries.push(entry);
+        }
+        entry.active = true;
+        entry.animation.startTimestamp = null;
+        entry.animation.elapsedMs = 0;
+        entry.animation.progress = 0;
+        entry.animation.lastStageKey = null;
+        entry.animation.latestStatus = null;
+
+        if (!initial) {
+            this.updateRouteSummary(entry.routeIndex, (summary) => {
+                summary.active = Math.min(summary.total, summary.active + 1);
+                summary.waiting = Math.max(0, summary.waiting - 1);
+            });
+            this.applyQueueState(entry.queueKey);
+            this.notifyQueueChange(entry.queueKey);
+        }
+    }
+
+    update(timestamp) {
+        const useQueueExecution = this.mode === 'nm' || this.queueConfig.size > 0;
+        if (useQueueExecution) {
+            const snapshot = this.activeEntries.slice();
+            const completed = [];
+            snapshot.forEach((entry) => {
+                entry.animation.update(timestamp);
+                if (entry.animation.isComplete()) {
+                    completed.push(entry);
+                }
+            });
+            if (completed.length) {
+                completed.forEach((entry) => this.completeEntry(entry));
+            }
+        } else {
+            this.activeEntries.forEach((entry) => entry.animation.update(timestamp));
+        }
+    }
+
+    completeEntry(entry) {
+        const state = this.queueState.get(entry.queueKey);
+        if (state) {
+            state.active = state.active.filter((item) => item !== entry);
+        }
+        this.activeEntries = this.activeEntries.filter((item) => item !== entry);
+        entry.active = false;
+
+        this.updateRouteSummary(entry.routeIndex, (summary) => {
+            summary.active = Math.max(0, summary.active - 1);
+            summary.delivered = Math.min(summary.total, summary.delivered + 1);
+        });
+        this.applyQueueState(entry.queueKey);
+
+        const next = this.dequeueNext(entry.queueKey);
+        if (next) {
+            this.startEntry(next, { initial: false });
+        } else {
+            this.notifyQueueChange(entry.queueKey);
+        }
+    }
+
+    dequeueNext(queueKey) {
+        const state = this.queueState.get(queueKey);
+        if (!state || !state.waiting.length) return null;
+        return state.waiting.shift();
+    }
+
+    updateRouteSummary(routeIndex, mutator) {
+        if (!Number.isFinite(routeIndex) || !this.routeSummary) return;
+        const current = this.routeSummary instanceof Map
+            ? this.routeSummary.get(routeIndex)
+            : this.routeSummary[routeIndex];
+        const base = current ? { ...current } : { total: 0, active: 0, waiting: 0, delivered: 0 };
+        mutator(base);
+        const total = Number.isFinite(base.total) ? base.total : Number(current?.total ?? 0) || 0;
+        base.total = total;
+        base.active = clamp(Number(base.active) || 0, 0, total);
+        base.delivered = clamp(Number(base.delivered) || 0, 0, total);
+        const remaining = Math.max(total - base.delivered, 0);
+        const waitingCandidate = Number(base.waiting) || Number(current?.waiting ?? 0) || 0;
+        base.waiting = clamp(waitingCandidate, 0, remaining);
+
+        if (this.routeSummary instanceof Map) {
+            this.routeSummary.set(routeIndex, base);
+        } else {
+            this.routeSummary[routeIndex] = base;
+        }
+    }
+
+    applyQueueState(queueKey) {
+        const config = this.queueConfig.get(queueKey) || null;
+        const state = this.queueState.get(queueKey) || null;
+        if (!config || !state) return;
+
+        const ifaceRuntime = ensureInterfaceRuntimeState(config.sourceId, config.neighborNode);
+        if (ifaceRuntime && ifaceRuntime.sendBuffer) {
+            if (Number.isFinite(config.capacity) && config.capacity > 0) {
+                ifaceRuntime.sendBuffer.capacity = config.capacity;
+            }
+            ifaceRuntime.sendBuffer.used = state.active.length;
+            ifaceRuntime.sendBuffer.queue = Math.max(state.waiting.length, 0);
+            ifaceRuntime.sendBuffer.state = state.active.length > 0
+                ? 'transferring'
+                : (state.waiting.length > 0 ? 'primed' : 'idle');
+        }
+
+        this.updateSourceRuntime(config.sourceId);
+    }
+
+    updateSourceRuntime(sourceId) {
+        if (!sourceId) return;
+        const queues = this.sourceQueues.get(sourceId);
+        const runtime = ensureNodeRuntimeState(sourceId);
+        if (!runtime) return;
+
+        let active = 0;
+        let waiting = 0;
+        if (queues instanceof Set) {
+            queues.forEach((key) => {
+                const state = this.queueState.get(key);
+                if (state) {
+                    active += state.active.length;
+                    waiting += state.waiting.length;
+                }
+            });
+        }
+
+        runtime.applicationBuffer = active + waiting;
+        if (active > 0) {
+            runtime.sendBuffer = 'transferring';
+            runtime.handshake = 'transferring';
+        } else if (waiting > 0) {
+            runtime.sendBuffer = 'primed';
+            runtime.handshake = 'primed';
+        } else {
+            runtime.sendBuffer = 'idle';
+            runtime.handshake = 'idle';
+        }
+        runtime.lastUpdated = performance.now();
+
+        if (
+            typeof isNodePanelOpen === 'function'
+            && isNodePanelOpen()
+            && typeof updateNodePanelContent === 'function'
+            && selectedNodeId === sourceId
+        ) {
+            updateNodePanelContent();
+        }
+    }
+
+    notifyQueueChange(queueKey) {
+        if (typeof renderMultiRouteList === 'function') {
+            renderMultiRouteList();
+        }
+        const config = this.queueConfig.get(queueKey);
+        if (
+            config
+            && typeof isNodePanelOpen === 'function'
+            && isNodePanelOpen()
+            && typeof updateNodePanelContent === 'function'
+            && selectedNodeId === config.sourceId
+        ) {
+            updateNodePanelContent();
+        }
+    }
+
+    isComplete() {
+        if (this.mode === 'nm' || this.queueConfig.size > 0) {
+            return this.allEntries.every((entry) => entry.animation.isComplete());
+        }
+        return this.activeEntries.every((entry) => entry.animation.isComplete());
+    }
 }
 
 class RoutePreview {
@@ -3048,7 +3931,12 @@ function stageFromProgress(progress) {
     };
 }
 
-function aggregateParallelStatuses(statuses, { timerOverride, forceComplete = false } = {}) {
+function aggregateParallelStatuses(statuses, {
+    timerOverride,
+    forceComplete = false,
+    mode = null,
+    routeSummary = null,
+} = {}) {
     if (!Array.isArray(statuses) || !statuses.length) {
         return {
             hopText: '0 / 0',
@@ -3063,10 +3951,19 @@ function aggregateParallelStatuses(statuses, { timerOverride, forceComplete = fa
         };
     }
 
-    const total = statuses.length;
+    const statusCount = statuses.length;
+    let total = statusCount;
     let completed = 0;
     let progressSum = 0;
     let maxTimer = 0;
+
+    const summaryEntries = mode === 'nm'
+        ? routeSummary instanceof Map
+            ? Array.from(routeSummary.values())
+            : routeSummary && typeof routeSummary === 'object'
+                ? Object.values(routeSummary)
+                : []
+        : [];
 
     statuses.forEach((status) => {
         if (!status) return;
@@ -3084,27 +3981,88 @@ function aggregateParallelStatuses(statuses, { timerOverride, forceComplete = fa
         completed = total;
     }
 
-    const progressPercent = forceComplete
+    let progressPercent = forceComplete
         ? 100
-        : Math.round(progressSum / total);
-    const allComplete = forceComplete || completed === total;
+        : Math.round(progressSum / Math.max(statusCount, 1));
+    let allComplete = forceComplete || completed === total;
     const timer = typeof timerOverride === 'number' ? timerOverride : Math.round(maxTimer);
-    const remaining = Math.max(total - completed, 0);
+    let remaining = Math.max(total - completed, 0);
+    const isNmMode = mode === 'nm';
+
+    if (isNmMode && summaryEntries.length) {
+        const validEntries = summaryEntries.filter((entry) => entry && Number.isFinite(entry.total));
+        if (validEntries.length) {
+            total = validEntries.length;
+            const completedRoutes = validEntries.filter((entry) => entry.delivered >= entry.total).length;
+            completed = completedRoutes;
+            remaining = Math.max(total - completedRoutes, 0);
+            const deliveredPortion = validEntries.reduce((sum, entry) => {
+                if (!entry.total) return sum + 1;
+                const ratio = entry.delivered / entry.total;
+                return sum + clamp(ratio, 0, 1);
+            }, 0);
+            progressPercent = forceComplete
+                ? 100
+                : Math.round((deliveredPortion / validEntries.length) * 100);
+            allComplete = forceComplete || completedRoutes === validEntries.length;
+        }
+    }
+
     return {
         hopText: `${completed} / ${total}`,
         nodesText: allComplete
-            ? 'All packets delivered'
-            : `${remaining} packet${remaining === 1 ? '' : 's'} still in flight`,
+            ? (isNmMode ? 'All routes delivered' : 'All packets delivered')
+            : `${remaining} ${isNmMode ? 'route' : 'packet'}${remaining === 1 ? '' : 's'} still in flight`,
         phaseKey: allComplete ? 'completed' : 'data',
-        phaseLabel: allComplete ? 'Completed' : 'Parallel',
-        signalText: allComplete ? 'Idle' : 'Parallel active',
+        phaseLabel: allComplete ? 'Completed' : (isNmMode ? 'n → m' : 'Parallel'),
+        signalText: allComplete ? 'Idle' : (isNmMode ? 'n → m active' : 'Parallel active'),
         signalStates: allComplete
             ? { req: 'sleep', ack: 'sleep', data: 'sleep' }
             : { req: 'active', ack: 'active', data: 'active' },
-        transferText: allComplete ? 'Packets delivered' : 'Multiple packets transferring',
+        transferText: allComplete
+            ? (isNmMode ? 'Routes delivered' : 'Packets delivered')
+            : (isNmMode ? 'Multiple routes transferring' : 'Multiple packets transferring'),
         progressPercent,
         timer,
     };
+}
+
+function registerDeliveredPacket(nodeState, nodeId, packetKey) {
+    if (!nodeState || !packetKey) {
+        return false;
+    }
+    if (!(nodeState.deliveredPackets instanceof Set)) {
+        nodeState.deliveredPackets = new Set();
+    }
+    if (nodeState.deliveredPackets.has(packetKey)) {
+        return false;
+    }
+    nodeState.deliveredPackets.add(packetKey);
+    nodeState.applicationBuffer = Math.max(0, Number(nodeState.applicationBuffer || 0)) + 1;
+    nodeState.lastUpdated = performance.now();
+
+    if (multiRunState) {
+        if (!(multiRunState.deliveredCounts instanceof Map)) {
+            multiRunState.deliveredCounts = new Map();
+        }
+        const existing = multiRunState.deliveredCounts.get(nodeId) || 0;
+        multiRunState.deliveredCounts.set(nodeId, existing + 1);
+        if (!(multiRunState.deliveredPacketKeys instanceof Set)) {
+            multiRunState.deliveredPacketKeys = new Set();
+        }
+        multiRunState.deliveredPacketKeys.add(`${nodeId}:${packetKey}`);
+    }
+
+    if (
+        typeof isNodePanelOpen === 'function'
+        && isNodePanelOpen()
+        && typeof updateNodePanelContent === 'function'
+        && selectedNodeId === nodeId
+    ) {
+        updateNodePanelContent();
+    }
+
+    return true;
 }
 
 function updateNodeRuntimeFromStatus(status, animationContext = animationState) {
@@ -3120,6 +4078,7 @@ function updateNodeRuntimeFromStatus(status, animationContext = animationState) 
         ? animationContext.path[0]
         : null;
     const originId = originNode ? makeNodeId(originNode) : null;
+    const isNmMode = multiRunState?.mode === 'nm';
 
     if (!status.segment) {
         const isCompletedPhase = status.phaseKey === 'completed' || status.phaseLabel === 'Completed';
@@ -3177,7 +4136,13 @@ function updateNodeRuntimeFromStatus(status, animationContext = animationState) 
             sourceState.handshake = 'primed';
             targetState.receiveBuffer = 'idle';
             targetState.handshake = 'idle';
-            if (phaseChanged && originId && sourceId === originId && sourceState.applicationBuffer > 0) {
+            if (
+                !isNmMode
+                && phaseChanged
+                && originId
+                && sourceId === originId
+                && sourceState.applicationBuffer > 0
+            ) {
                 sourceState.applicationBuffer = Math.max(0, sourceState.applicationBuffer - 1);
             }
             break;
@@ -3205,7 +4170,6 @@ function updateNodeRuntimeFromStatus(status, animationContext = animationState) 
             targetState.handshake = 'releasing';
             if (isFinalHop) {
                 targetState.receiveBuffer = 'delivered';
-                targetState.applicationBuffer = 1;
             } else {
                 targetState.receiveBuffer = 'ready';
                 targetState.applicationBuffer = 0;
@@ -3216,8 +4180,8 @@ function updateNodeRuntimeFromStatus(status, animationContext = animationState) 
             sourceState.handshake = 'idle';
             if (isFinalHop) {
                 targetState.receiveBuffer = 'delivered';
-                targetState.applicationBuffer = 1;
                 targetState.handshake = 'idle';
+                registerDeliveredPacket(targetState, targetId, packetKey);
             }
             break;
         default:
@@ -3270,6 +4234,7 @@ function updateNodeRuntimeFromStatus(status, animationContext = animationState) 
             timestamp,
             remove: true,
         });
+        registerDeliveredPacket(targetState, targetId, packetKey);
     }
 
     if (selectedNodeId === sourceId || selectedNodeId === targetId) {
@@ -3333,6 +4298,482 @@ function renderFlow(flowEntries) {
     }
 }
 
+function resolveNodeLabel(node) {
+    if (typeof node === 'string') {
+        return node;
+    }
+    return safeNodeLabel(node || {});
+}
+
+function createLogEntry(context, stage, description, metadata = []) {
+    return {
+        context,
+        stage,
+        description,
+        metadata: Array.isArray(metadata) ? metadata.filter(Boolean) : [],
+    };
+}
+
+function buildDetailedLogForPayload(payload, options = {}) {
+    const entries = [];
+    if (!payload) {
+        return entries;
+    }
+
+    const {
+        label = 'Packet',
+        bufferCapacity = null,
+        activeCount = null,
+        waitingCount = null,
+        queuedInitially = false,
+        sourceLabel: providedSource = null,
+        destinationLabel: providedDestination = null,
+        neighborLabel = null,
+        packetCount = 1,
+    } = options;
+
+    const pathArray = Array.isArray(payload.path) ? payload.path : [];
+    const hopCount = Number.isFinite(payload.hopCount)
+        ? payload.hopCount
+        : Math.max(pathArray.length - 1, 0);
+    const sourceLabel = typeof providedSource === 'string' && providedSource.length
+        ? providedSource
+        : resolveNodeLabel(payload.source || payload.sourceNode || pathArray[0] || null);
+    const destinationLabel = typeof providedDestination === 'string' && providedDestination.length
+        ? providedDestination
+        : resolveNodeLabel(payload.destination || payload.destinationNode || pathArray[pathArray.length - 1] || null);
+
+    const initialDetails = [
+        `Destination: ${destinationLabel}`,
+        `Hop count: ${hopCount}`,
+        packetCount > 1 ? `Packets scheduled: ${packetCount}` : null,
+    ].filter(Boolean);
+
+    entries.push(createLogEntry(label, 'Init', `Source ${sourceLabel} prepares transmission`, initialDetails));
+
+    if (bufferCapacity !== null || activeCount !== null || waitingCount !== null) {
+        const bufferDetails = [
+            Number.isFinite(bufferCapacity) ? `Capacity: ${bufferCapacity}` : null,
+            Number.isFinite(activeCount) ? `Active: ${activeCount}` : null,
+            Number.isFinite(waitingCount) ? `Queued: ${waitingCount}` : null,
+        ].filter(Boolean);
+        const bufferLabel = neighborLabel
+            ? `Send buffer toward ${neighborLabel}`
+            : 'Send buffer status';
+        entries.push(createLogEntry(label, 'Buffer', bufferLabel, bufferDetails));
+        if (queuedInitially) {
+            entries.push(createLogEntry(label, 'Queue', 'Packet queued until slot frees', []));
+        }
+    }
+
+    const segments = Array.isArray(payload.segments) ? payload.segments : [];
+    segments.forEach((segment, segmentIndex) => {
+        const hop = segmentIndex + 1;
+        const fromNode = segment?.from || pathArray[segmentIndex] || null;
+        const toNode = segment?.to || pathArray[segmentIndex + 1] || null;
+        const fromLabel = resolveNodeLabel(fromNode);
+        const toLabel = resolveNodeLabel(toNode);
+        const hopType = segment?.type === 'ring' ? 'Ring' : 'Tree';
+
+        entries.push(createLogEntry(label, `Hop ${hop} · REQ`, `${fromLabel} asserts REQ`, [
+            `Target: ${toLabel}`,
+            `Link: ${hopType}`,
+        ]));
+        entries.push(createLogEntry(label, `Hop ${hop} · ACK`, `${toLabel} raises ACK`, [
+            `Source: ${fromLabel}`,
+        ]));
+        entries.push(createLogEntry(label, `Hop ${hop} · DATA`, `Transfer ${fromLabel} → ${toLabel}`, [
+            'Handshake lines released',
+        ]));
+    });
+
+    entries.push(createLogEntry(label, 'Complete', `Packet delivered to ${destinationLabel}`, []));
+    return entries;
+}
+
+function buildDetailedLogForParallelPayloads(payloads, options = {}) {
+    const entries = [];
+    if (!Array.isArray(payloads)) {
+        return entries;
+    }
+
+    const mode = options.mode === 'nm' ? 'nm' : 'parallel';
+    const queueConfig = options.queueConfig instanceof Map
+        ? options.queueConfig
+        : options.queueConfig && typeof options.queueConfig === 'object'
+            ? new Map(Object.entries(options.queueConfig))
+            : null;
+    const routeSummary = options.routeSummary instanceof Map
+        ? options.routeSummary
+        : options.routeSummary && typeof options.routeSummary === 'object'
+            ? new Map(Object.entries(options.routeSummary))
+            : null;
+
+    payloads.forEach((payload, index) => {
+        if (!payload) {
+            return;
+        }
+        const label = mode === 'nm' ? `Route ${index + 1}` : `Packet ${index + 1}`;
+        const routeIndex = Number.isFinite(payload.routeIndex) ? payload.routeIndex : index;
+        const summary = routeSummary ? routeSummary.get(routeIndex) : null;
+        const queueKey = payload.queueKey || null;
+        const config = queueKey && queueConfig ? queueConfig.get(queueKey) : null;
+        const neighborLabel = options.neighborLabelOverride || (config?.neighborNode
+            ? resolveNodeLabel(config.neighborNode)
+            : payload.firstHopNode
+                ? resolveNodeLabel(payload.firstHopNode)
+                : null);
+        const sourceLabel = resolveNodeLabel(payload.sourceNode || payload.source || null);
+        const destinationLabel = resolveNodeLabel(payload.destinationNode || payload.destination || null);
+        const packetCount = Number.isFinite(payload.packetBatches)
+            ? payload.packetBatches
+            : Number.isFinite(payload.packetCount)
+                ? payload.packetCount
+                : 1;
+
+        entries.push(
+            ...buildDetailedLogForPayload(payload, {
+                label,
+                bufferCapacity: config?.capacity ?? payload.bufferCapacity ?? null,
+                activeCount: summary?.active ?? null,
+                waitingCount: summary?.waiting ?? null,
+                queuedInitially: Boolean(payload.initialQueueState === 'waiting'),
+                sourceLabel,
+                destinationLabel,
+                neighborLabel,
+                packetCount,
+            }),
+        );
+    });
+
+    return entries;
+}
+
+function escapeHtml(value) {
+    if (value === null || value === undefined) {
+        return '';
+    }
+    return String(value).replace(/[&<>"']/g, (char) => {
+        const lookup = {
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#039;',
+        };
+        return lookup[char] || char;
+    });
+}
+
+function renderLogModal() {
+    if (!logModalBody) {
+        return;
+    }
+    logModalBody.innerHTML = '';
+    if (!detailedLogEntries.length) {
+        const empty = document.createElement('p');
+        empty.className = 'log-modal__empty';
+        empty.textContent = 'No log entries available.';
+        logModalBody.appendChild(empty);
+        return;
+    }
+
+    const table = document.createElement('table');
+    table.className = 'log-table';
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    ['Context', 'Stage', 'Description', 'Details'].forEach((label) => {
+        const th = document.createElement('th');
+        th.textContent = label;
+        headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    detailedLogEntries.forEach((entry) => {
+        if (!entry) {
+            return;
+        }
+        const row = document.createElement('tr');
+
+        const contextCell = document.createElement('td');
+        contextCell.className = 'log-table__context';
+        contextCell.textContent = entry.context || '';
+        row.appendChild(contextCell);
+
+        const stageCell = document.createElement('td');
+        stageCell.textContent = entry.stage || '';
+        row.appendChild(stageCell);
+
+        const descriptionCell = document.createElement('td');
+        descriptionCell.textContent = entry.description || '';
+        row.appendChild(descriptionCell);
+
+        const detailsCell = document.createElement('td');
+        if (Array.isArray(entry.metadata) && entry.metadata.length) {
+            entry.metadata.forEach((detail) => {
+                const metaLine = document.createElement('span');
+                metaLine.className = 'log-table__metadata';
+                metaLine.textContent = detail;
+                detailsCell.appendChild(metaLine);
+            });
+        } else {
+            detailsCell.textContent = '—';
+        }
+        row.appendChild(detailsCell);
+
+        tbody.appendChild(row);
+    });
+    table.appendChild(tbody);
+    logModalBody.appendChild(table);
+    logModalBody.scrollTop = 0;
+}
+
+function setDetailedLog(entries, { title } = {}) {
+    detailedLogEntries = Array.isArray(entries) ? entries.filter(Boolean) : [];
+    detailedLogTitle = title || 'Detailed log';
+    const hasEntries = detailedLogEntries.length > 0;
+
+    if (openLogModalBtn) {
+        openLogModalBtn.disabled = !hasEntries;
+        openLogModalBtn.setAttribute('aria-disabled', hasEntries ? 'false' : 'true');
+        openLogModalBtn.title = hasEntries
+            ? 'View detailed log'
+            : 'Run a simulation to generate log entries';
+    }
+
+    if (exportLogPdfBtn) {
+        exportLogPdfBtn.disabled = !hasEntries;
+        exportLogPdfBtn.setAttribute('aria-disabled', hasEntries ? 'false' : 'true');
+        exportLogPdfBtn.title = hasEntries
+            ? 'Export detailed log as PDF'
+            : 'Run a simulation to export the log as PDF';
+    }
+
+    if (isLogModalOpen()) {
+        renderLogModal();
+        if (logModalTitle) {
+            logModalTitle.textContent = detailedLogTitle;
+        }
+    }
+}
+
+function isLogModalOpen() {
+    return Boolean(logModal && logModal.classList.contains('is-visible'));
+}
+
+function openLogModal() {
+    if (!logModal || !detailedLogEntries.length) {
+        return;
+    }
+    logModal.classList.add('is-visible');
+    logModal.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('modal-open');
+    if (logModalTitle) {
+        logModalTitle.textContent = detailedLogTitle;
+    }
+    renderLogModal();
+    if (logModalClose) {
+        logModalClose.focus();
+    }
+}
+
+function closeLogModal() {
+    if (!isLogModalOpen()) {
+        return;
+    }
+    logModal.classList.remove('is-visible');
+    logModal.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('modal-open');
+    if (openLogModalBtn) {
+        openLogModalBtn.focus();
+    }
+}
+
+function exportLogAsPdf() {
+    if (!detailedLogEntries.length) {
+        window.alert('Run a simulation to generate log entries before exporting.');
+        return;
+    }
+
+    const docTitle = detailedLogTitle || 'Detailed log';
+
+    const generatedAt = new Date().toLocaleString();
+    const styles = `
+        :root {
+            color-scheme: only light;
+        }
+        body {
+            font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            margin: 32px;
+            color: #0f172a;
+            background: #f8fafc;
+        }
+        h1 {
+            margin: 0 0 8px 0;
+            font-size: 1.85rem;
+            letter-spacing: -0.01em;
+        }
+        .subtitle {
+            margin: 0 0 24px 0;
+            color: #475569;
+            font-size: 0.95rem;
+        }
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            border-radius: 14px;
+            overflow: hidden;
+            box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.3);
+        }
+        thead {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.18), rgba(14, 165, 233, 0.18));
+        }
+        th, td {
+            padding: 16px 18px;
+            text-align: left;
+            vertical-align: top;
+            font-size: 0.95rem;
+        }
+        th {
+            font-weight: 600;
+            color: #1e293b;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+        }
+        tbody tr:nth-child(odd) {
+            background: rgba(226, 232, 240, 0.28);
+        }
+        tbody tr:nth-child(even) {
+            background: #ffffff;
+        }
+        tbody tr:hover {
+            background: rgba(59, 130, 246, 0.12);
+        }
+        .context {
+            font-weight: 600;
+            color: #1d4ed8;
+            min-width: 110px;
+        }
+        .metadata {
+            display: inline-block;
+            padding: 4px 10px;
+            margin: 0 6px 6px 0;
+            font-size: 0.85rem;
+            color: #334155;
+            background: rgba(148, 163, 184, 0.26);
+            border-radius: 10px;
+        }
+        footer {
+            margin-top: 32px;
+            text-align: right;
+            color: #475569;
+            font-size: 0.9rem;
+        }
+    `;
+
+    const rowsHtml = detailedLogEntries
+        .map((entry) => {
+            if (!entry) {
+                return '';
+            }
+            const metadataHtml = Array.isArray(entry.metadata) && entry.metadata.length
+                ? entry.metadata.map((detail) => `<span class="metadata">${escapeHtml(detail)}</span>`).join('')
+                : '—';
+
+            return `
+                <tr>
+                    <td class="context">${escapeHtml(entry.context || '')}</td>
+                    <td>${escapeHtml(entry.stage || '')}</td>
+                    <td>${escapeHtml(entry.description || '')}</td>
+                    <td>${metadataHtml}</td>
+                </tr>
+            `;
+        })
+        .join('');
+
+    const html = `
+        <!DOCTYPE html>
+        <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <title>${escapeHtml(docTitle)}</title>
+                <style>${styles}</style>
+            </head>
+            <body>
+                <h1>${escapeHtml(docTitle)}</h1>
+                <p class="subtitle">Generated on ${escapeHtml(generatedAt)}</p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Context</th>
+                            <th>Stage</th>
+                            <th>Description</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rowsHtml}
+                    </tbody>
+                </table>
+                <footer>© RicoBit Simulator. All rights reserved.</footer>
+            </body>
+        </html>
+    `;
+
+    const printFrame = document.createElement('iframe');
+    printFrame.title = 'RicoBit detailed log export';
+    printFrame.style.position = 'fixed';
+    printFrame.style.right = '0';
+    printFrame.style.bottom = '0';
+    printFrame.style.width = '0';
+    printFrame.style.height = '0';
+    printFrame.style.border = '0';
+    printFrame.setAttribute('aria-hidden', 'true');
+
+    document.body.appendChild(printFrame);
+
+    const finalizePrint = () => {
+        try {
+            const frameWindow = printFrame.contentWindow;
+            if (!frameWindow) {
+                throw new Error('No frame window available');
+            }
+            frameWindow.focus();
+            frameWindow.print();
+        } catch (error) {
+            console.error('Failed to trigger PDF export', error);
+            window.alert('Unable to open the print dialog. Use your browser\'s print option as a fallback.');
+        } finally {
+            setTimeout(() => {
+                if (printFrame.parentNode) {
+                    printFrame.parentNode.removeChild(printFrame);
+                }
+            }, 750);
+        }
+    };
+
+    const frameDoc = printFrame.contentDocument || (printFrame.contentWindow && printFrame.contentWindow.document);
+    if (!frameDoc) {
+        window.alert('Export frame could not be prepared.');
+        if (printFrame.parentNode) {
+            printFrame.parentNode.removeChild(printFrame);
+        }
+        return;
+    }
+
+    frameDoc.open();
+    frameDoc.write(html);
+    frameDoc.close();
+
+    if (printFrame.contentWindow && printFrame.contentWindow.document.readyState === 'complete') {
+        setTimeout(finalizePrint, 100);
+    } else {
+        printFrame.addEventListener('load', () => setTimeout(finalizePrint, 75), { once: true });
+    }
+}
+
 function parseSelectValue(value) {
     if (typeof value !== 'string') {
         return { ring: 0, index: 0 };
@@ -3350,14 +4791,14 @@ function collectSelectedDestinations() {
         .filter((node) => Number.isFinite(node.ring) && Number.isFinite(node.index));
 }
 
-function handleSourceSelectChange({ announce = false, message } = {}) {
+function handleSourceSelectChange({ announce = false, message, openNodeDetails = true } = {}) {
     syncSelectionState();
     const nodeId = currentSourceId;
     if (!nodeId) return;
     const meta = nodeMeta.get(nodeId) || parseSelectValue(nodeId);
     focusNode(nodeId, {
         auto: nodePanelAutoTracking,
-        openPanelOnFocus: true,
+        openPanelOnFocus: openNodeDetails,
     });
     if (announce && hudStatus && meta) {
         hudStatus.textContent = message || `Source set to ${nodeLabel(meta)}.`;
@@ -3365,14 +4806,14 @@ function handleSourceSelectChange({ announce = false, message } = {}) {
     renderTopology();
 }
 
-function handleDestinationSelectChange({ announce = false, message } = {}) {
+function handleDestinationSelectChange({ announce = false, message, openNodeDetails = true } = {}) {
     syncSelectionState();
     const nodeId = currentDestinationId;
     if (!nodeId) return;
     const meta = nodeMeta.get(nodeId) || parseSelectValue(nodeId);
     focusNode(nodeId, {
         auto: nodePanelAutoTracking,
-        openPanelOnFocus: true,
+        openPanelOnFocus: openNodeDetails,
     });
     if (announce && hudStatus && meta) {
         hudStatus.textContent = message || `Destination set to ${nodeLabel(meta)}.`;
@@ -3419,6 +4860,16 @@ async function simulateSingleRoute() {
     try {
         const payload = await fetchRoutePayload(source, destination);
         prepareRoute(payload);
+        setDetailedLog(
+            buildDetailedLogForPayload(payload, {
+                label: 'Packet 1',
+                sourceLabel: nodeLabel(source),
+                destinationLabel: nodeLabel(destination),
+            }),
+            {
+                title: `1 → 1 log · ${nodeLabel(source)} → ${nodeLabel(destination)}`,
+            },
+        );
         hudStatus.textContent = 'Route ready. Click "Animate path" to begin.';
     } catch (error) {
         console.error(error);
@@ -3430,6 +4881,7 @@ async function simulateSingleRoute() {
         renderTopology();
         updateAnimateButton({ disabled: true, busy: false, label: animateBtn.dataset.defaultLabel });
         updateAnimationControlState();
+        setDetailedLog([]);
     }
 }
 
@@ -3462,14 +4914,15 @@ async function simulateParallelRoutes() {
     });
 
     const uniqueDestinations = Array.from(dedupe.values());
-    if (!uniqueDestinations.length) {
+    const destinationTotal = uniqueDestinations.length;
+    if (!destinationTotal) {
         hudStatus.textContent = 'Add one or more destination nodes for 1 → n parallel simulation.';
         setStatusIdle('Awaiting destination selection');
         updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
         return;
     }
 
-    hudStatus.textContent = `Computing ${uniqueDestinations.length} parallel route(s)…`;
+    hudStatus.textContent = `Computing ${destinationTotal} parallel route(s)…`;
 
     try {
         const rawPayloads = await Promise.all(
@@ -3484,6 +4937,7 @@ async function simulateParallelRoutes() {
         }
 
         const packetCount = rawPayloads.length;
+        const sourceNodeId = makeNodeId(source);
         const enrichedPayloads = rawPayloads.map((payload, index) => {
             const pathArray = Array.isArray(payload.path) ? payload.path : [];
             const computedDestination = pathArray.length
@@ -3504,6 +4958,103 @@ async function simulateParallelRoutes() {
             };
         });
 
+        const queueConfig = new Map();
+        const routeQueueSummary = new Map();
+        const queueStats = new Map();
+        let totalActive = 0;
+        let totalWaiting = 0;
+
+        enrichedPayloads.forEach((payload, index) => {
+            const pathArray = Array.isArray(payload.path) ? payload.path : [];
+            const neighborNode = pathArray.length > 1
+                ? pathArray[1]
+                : (payload.destination || pathArray[pathArray.length - 1] || null);
+            const neighborId = neighborNode ? makeNodeId(neighborNode) : `${payload.packetIndex}`;
+            const queueKey = `${sourceNodeId}->${neighborId}`;
+            const capacity = resolveSendBufferCapacity(sourceNodeId, neighborNode);
+
+            if (!queueConfig.has(queueKey)) {
+                queueConfig.set(queueKey, {
+                    capacity,
+                    sourceId: sourceNodeId,
+                    sourceNode: source,
+                    neighborNode,
+                });
+            } else {
+                const config = queueConfig.get(queueKey);
+                config.capacity = capacity;
+            }
+
+            const stats = queueStats.get(queueKey) || { capacity, active: 0, waiting: 0 };
+            stats.capacity = capacity;
+            const slotAvailable = stats.active < Math.max(1, stats.capacity);
+            if (slotAvailable) {
+                stats.active += 1;
+                totalActive += 1;
+            } else {
+                stats.waiting += 1;
+                totalWaiting += 1;
+            }
+            queueStats.set(queueKey, stats);
+
+            payload.routeIndex = index;
+            payload.queueKey = queueKey;
+            payload.bufferCapacity = capacity;
+            payload.firstHopNode = neighborNode;
+            payload.firstHopId = neighborId;
+            payload.sourceNode = source;
+            payload.sourceNodeId = sourceNodeId;
+            payload.initialQueueState = slotAvailable ? 'active' : 'waiting';
+
+            routeQueueSummary.set(index, {
+                total: 1,
+                active: slotAvailable ? 1 : 0,
+                waiting: slotAvailable ? 0 : 1,
+                delivered: 0,
+            });
+        });
+
+        const timestamp = performance.now();
+        queueConfig.forEach((config, key) => {
+            const stats = queueStats.get(key) || { active: 0, waiting: 0 };
+            const ifaceRuntime = ensureInterfaceRuntimeState(config.sourceId, config.neighborNode);
+            if (ifaceRuntime && ifaceRuntime.sendBuffer) {
+                ifaceRuntime.sendBuffer.capacity = config.capacity;
+                ifaceRuntime.sendBuffer.used = stats.active;
+                ifaceRuntime.sendBuffer.queue = stats.waiting;
+                ifaceRuntime.sendBuffer.state = stats.active > 0
+                    ? 'primed'
+                    : (stats.waiting > 0 ? 'primed' : 'idle');
+            }
+        });
+        const sourceRuntime = ensureNodeRuntimeState(sourceNodeId);
+        sourceRuntime.applicationBuffer = enrichedPayloads.length;
+        if (totalActive > 0) {
+            sourceRuntime.sendBuffer = 'primed';
+            sourceRuntime.handshake = 'primed';
+        } else if (totalWaiting > 0) {
+            sourceRuntime.sendBuffer = 'primed';
+            sourceRuntime.handshake = 'primed';
+        } else {
+            sourceRuntime.sendBuffer = 'idle';
+            sourceRuntime.handshake = 'idle';
+        }
+        sourceRuntime.lastUpdated = timestamp;
+        if (isNodePanelOpen() && selectedNodeId === sourceNodeId) {
+            updateNodePanelContent();
+        }
+
+        const previewRoutes = enrichedPayloads.map((payload, index) => {
+            const color = PARALLEL_ROUTE_COLORS[index % PARALLEL_ROUTE_COLORS.length];
+            return new RoutePreview(payload, {
+                renderStyle: 'pending',
+                treeColor: color,
+                ringColor: color,
+                strokeOpacity: 0.35,
+                lineWidth: 3,
+            });
+        });
+
         multiRunState = {
             mode: 'parallel',
             payloads: enrichedPayloads,
@@ -3512,17 +5063,11 @@ async function simulateParallelRoutes() {
             completed: new Set(),
             completedRoutes: [],
             completedStatuses: [],
-            previewRoutes: enrichedPayloads.map((payload, index) => {
-                const color = PARALLEL_ROUTE_COLORS[index % PARALLEL_ROUTE_COLORS.length];
-                return new RoutePreview(payload, {
-                    renderStyle: 'pending',
-                    treeColor: color,
-                    ringColor: color,
-                    strokeOpacity: 0.35,
-                    lineWidth: 3,
-                });
-            }),
+            previewRoutes,
             source,
+            queueConfig,
+            routeQueueSummary,
+            totalPackets: packetCount,
         };
 
         summary.textContent = `Parallel routes: ${packetCount} destination(s) · Packets: ${packetCount}`;
@@ -3541,6 +5086,16 @@ async function simulateParallelRoutes() {
             };
         });
         renderFlow(flowEntries);
+        setDetailedLog(
+            buildDetailedLogForParallelPayloads(enrichedPayloads, {
+                mode: 'parallel',
+                queueConfig,
+                routeSummary: routeQueueSummary,
+            }),
+            {
+                title: `1 → n log · ${nodeLabel(source)} → ${destinationTotal} destination${destinationTotal === 1 ? '' : 's'}`,
+            },
+        );
 
         const firstPayload = enrichedPayloads[0];
         if (firstPayload) {
@@ -3567,23 +5122,295 @@ async function simulateParallelRoutes() {
         const hasSegments = enrichedPayloads.some((payload) => Array.isArray(payload.segments) && payload.segments.length);
         updateAnimateButton({ disabled: !hasSegments, busy: false, label: 'Animate all' });
 
-        const sourceNodeId = makeNodeId(source);
-        const sourceRuntime = ensureNodeRuntimeState(sourceNodeId);
-        sourceRuntime.applicationBuffer = packetCount;
-        sourceRuntime.handshake = packetCount > 0 ? 'primed' : 'idle';
-        sourceRuntime.sendBuffer = packetCount > 0 ? 'primed' : 'idle';
-        sourceRuntime.lastUpdated = performance.now();
-        if (selectedNodeId === sourceNodeId) {
-            updateNodePanelContent();
-        }
     } catch (error) {
         console.error(error);
         const message = error.message || 'Routing failed';
         hudStatus.textContent = message;
         setStatusIdle(message);
         updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+        setDetailedLog([]);
         resetMultiRunState();
         updateAnimationControlState();
+    }
+}
+
+async function simulateNmRoutes() {
+    if (!topologyData) return;
+    setPickMode(null);
+    stopAnimation();
+    resetAllNodeRuntimeState();
+    resetMultiRunState();
+    currentSourceId = null;
+    currentDestinationId = null;
+    if (isMobileSidebar() && isSidebarVisible()) {
+        closeSidebar();
+    }
+
+    const plan = collectNmRoutes();
+    if (!plan.length) {
+        hudStatus.textContent = 'Add at least one route row to run n → m simulation.';
+        setStatusIdle('Awaiting route plan');
+        updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+        setDetailedLog([]);
+        return;
+    }
+
+    const invalidEntry = plan.find((entry) => entry.sourceId === entry.destinationId);
+    if (invalidEntry) {
+        hudStatus.textContent = 'Source and destination must differ for each route row.';
+        setStatusIdle('Invalid route plan');
+        updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+        setDetailedLog([]);
+        return;
+    }
+
+    hudStatus.textContent = `Resolving ${plan.length} route${plan.length === 1 ? '' : 's'}…`;
+
+    const pairMap = new Map();
+    const fetchTasks = [];
+    plan.forEach((entry) => {
+        const key = `${entry.sourceId}->${entry.destinationId}`;
+        if (!pairMap.has(key)) {
+            pairMap.set(key, null);
+            fetchTasks.push(
+                fetchRoutePayload(entry.source, entry.destination)
+                    .then((payload) => {
+                        pairMap.set(key, payload);
+                    })
+            );
+        }
+    });
+
+    try {
+        await Promise.all(fetchTasks);
+    } catch (error) {
+        console.error(error);
+        const message = error.message || 'Routing failed';
+        hudStatus.textContent = message;
+        setStatusIdle(message);
+        updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+        setDetailedLog([]);
+        return;
+    }
+
+    const routePayloads = [];
+    const flowEntries = [];
+    let totalPackets = 0;
+
+    plan.forEach((entry, index) => {
+        const key = `${entry.sourceId}->${entry.destinationId}`;
+        const payload = pairMap.get(key);
+        if (!payload) {
+            return;
+        }
+        const pathArray = Array.isArray(payload.path) ? payload.path : [];
+        const firstHop = pathArray.length > 1 ? pathArray[1] : null;
+        const firstHopNode = firstHop || entry.destination;
+        const firstHopId = makeNodeId(firstHopNode);
+        const bufferCapacity = resolveSendBufferCapacity(entry.sourceId, firstHop);
+        const color = PARALLEL_ROUTE_COLORS[index % PARALLEL_ROUTE_COLORS.length];
+        const batches = Math.max(1, entry.packets);
+        totalPackets += batches;
+        const packetTemplate = (payload.packet && typeof payload.packet === 'object') ? payload.packet : {};
+        const packetPreview = {
+            ...packetTemplate,
+            source: entry.source,
+            destination: entry.destination,
+            data: packetTemplate.data || `Route ${index + 1}`,
+        };
+
+        routePayloads.push({
+            ...payload,
+            routeId: entry.id,
+            routeIndex: index,
+            packetBatches: batches,
+            bufferCapacity,
+            routeLabel: `${safeNodeLabel(entry.source)} → ${safeNodeLabel(entry.destination)}`,
+            color,
+            packet: packetPreview,
+            packetIndex: index + 1,
+            packetCount: plan.length,
+            sourceNode: entry.source,
+            destinationNode: entry.destination,
+            sourceNodeId: entry.sourceId,
+            destinationNodeId: entry.destinationId,
+            firstHopNode,
+            firstHopId,
+            queueKey: `${entry.sourceId}->${firstHopId}`,
+        });
+
+        flowEntries.push({
+            phase: `Route ${index + 1}`,
+            title: `${safeNodeLabel(entry.source)} → ${safeNodeLabel(entry.destination)}`,
+            details: [
+                `Hop count: ${payload.hopCount ?? 0}`,
+                `Packets: ${batches}`,
+                `Segments: ${Array.isArray(payload.segments) ? payload.segments.length : 0}`,
+            ],
+        });
+    });
+
+    if (!routePayloads.length) {
+        hudStatus.textContent = 'No valid routes generated from plan.';
+        setStatusIdle('Route plan invalid');
+        updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+        setDetailedLog([]);
+        return;
+    }
+
+    const packetPayloads = [];
+    const queueConfig = new Map();
+    const routeQueueSummary = new Map();
+    const sourceTotals = new Map();
+    const interfaceTotals = new Map();
+    let globalPacketIndex = 1;
+
+    routePayloads.forEach((payload) => {
+        const queueKey = payload.queueKey;
+        const configEntry = queueConfig.get(queueKey) || {
+            capacity: payload.bufferCapacity,
+            sourceId: payload.sourceNodeId,
+            sourceNode: payload.sourceNode,
+            neighborNode: payload.firstHopNode,
+            routeIndex: payload.routeIndex,
+            color: payload.color,
+        };
+        configEntry.capacity = payload.bufferCapacity;
+        queueConfig.set(queueKey, configEntry);
+
+        const initialActive = Math.min(payload.bufferCapacity, payload.packetBatches);
+        const initialWaiting = Math.max(payload.packetBatches - initialActive, 0);
+        routeQueueSummary.set(payload.routeIndex, {
+            total: payload.packetBatches,
+            active: initialActive,
+            waiting: initialWaiting,
+            delivered: 0,
+        });
+
+        const prevSourceTotal = sourceTotals.get(payload.sourceNodeId) || 0;
+        sourceTotals.set(payload.sourceNodeId, prevSourceTotal + payload.packetBatches);
+
+        const ifaceTotals = interfaceTotals.get(queueKey) || {
+            active: 0,
+            waiting: 0,
+            capacity: payload.bufferCapacity,
+            sourceId: payload.sourceNodeId,
+            sourceNode: payload.sourceNode,
+            neighborNode: payload.firstHopNode,
+        };
+        ifaceTotals.active += initialActive;
+        ifaceTotals.waiting += initialWaiting;
+        ifaceTotals.capacity = payload.bufferCapacity;
+        interfaceTotals.set(queueKey, ifaceTotals);
+
+        for (let packetIdx = 0; packetIdx < payload.packetBatches; packetIdx += 1) {
+            const packetClone = {
+                ...payload,
+                packetIndex: globalPacketIndex,
+                packetCount: totalPackets,
+                routePacketIndex: packetIdx + 1,
+                routePacketCount: payload.packetBatches,
+                packet: {
+                    ...payload.packet,
+                    data: `${payload.packet.data || payload.routeLabel} · Packet ${packetIdx + 1}`,
+                },
+                queueKey,
+            };
+            packetPayloads.push(packetClone);
+            globalPacketIndex += 1;
+        }
+    });
+
+    const timestamp = performance.now();
+    interfaceTotals.forEach((info) => {
+        const ifaceRuntime = ensureInterfaceRuntimeState(info.sourceId, info.neighborNode);
+        if (ifaceRuntime && ifaceRuntime.sendBuffer) {
+            ifaceRuntime.sendBuffer.capacity = info.capacity;
+            ifaceRuntime.sendBuffer.used = Math.min(info.capacity, info.active);
+            ifaceRuntime.sendBuffer.queue = Math.max(info.waiting, 0);
+            ifaceRuntime.sendBuffer.state = info.active > 0 ? 'primed' : (info.waiting > 0 ? 'primed' : 'idle');
+        }
+        const sourceRuntime = ensureNodeRuntimeState(info.sourceId);
+        sourceRuntime.sendBuffer = info.active > 0 ? 'primed' : (info.waiting > 0 ? 'primed' : 'idle');
+        sourceRuntime.handshake = info.active > 0 ? 'primed' : (info.waiting > 0 ? 'primed' : 'idle');
+        sourceRuntime.lastUpdated = timestamp;
+    });
+    sourceTotals.forEach((total, sourceId) => {
+        const sourceRuntime = ensureNodeRuntimeState(sourceId);
+        sourceRuntime.applicationBuffer = total;
+        sourceRuntime.lastUpdated = timestamp;
+    });
+    if (isNodePanelOpen()) {
+        updateNodePanelContent();
+    }
+
+    multiRunState = {
+        mode: 'nm',
+        payloads: routePayloads,
+        selectedIndex: 0,
+        completed: new Set(),
+        completedRoutes: [],
+        completedStatuses: [],
+        deliveredCounts: new Map(),
+        deliveredPacketKeys: new Set(),
+        previewRoutes: routePayloads.map((payload) => new RoutePreview(payload, {
+            renderStyle: 'pending',
+            treeColor: payload.color,
+            ringColor: payload.color,
+            strokeOpacity: 0.35,
+            lineWidth: 3,
+        })),
+        packetPayloads,
+        queueConfig,
+        routeQueueSummary,
+        totalPackets,
+    };
+
+    setDetailedLog(
+        buildDetailedLogForParallelPayloads(routePayloads, {
+            mode: 'nm',
+            queueConfig,
+            routeSummary: routeQueueSummary,
+        }),
+        {
+            title: `n → m log · ${routePayloads.length} route${routePayloads.length === 1 ? '' : 's'} (${totalPackets} packet${totalPackets === 1 ? '' : 's'})`,
+        },
+    );
+
+    summary.textContent = `Routes: ${routePayloads.length} · Packets: ${totalPackets}`;
+    renderMultiRouteList();
+    renderFlow(flowEntries);
+
+    const firstPayload = routePayloads[0];
+    if (firstPayload) {
+        prepareRoute(firstPayload, {
+            contextLabel: `Route 1 of ${routePayloads.length}`,
+            previewColors: {
+                treeColor: firstPayload.color,
+                ringColor: firstPayload.color,
+                strokeOpacity: 0.9,
+                lineWidth: 4,
+            },
+            buttonLabel: 'Animate all',
+        });
+        lastRoutePayload = firstPayload;
+    }
+
+    hudStatus.textContent = `Parallel plan ready: ${routePayloads.length} route${routePayloads.length === 1 ? '' : 's'}, ${totalPackets} packet${totalPackets === 1 ? '' : 's'}.`;
+    updateAnimateButton({ disabled: false, busy: false, label: 'Animate all' });
+
+    routePayloads.forEach((payload, index) => {
+        const firstPathNode = Array.isArray(payload.path) && payload.path.length ? payload.path[0] : payload.sourceNode;
+        const sourceNode = firstPathNode || plan[index]?.source || plan[0]?.source;
+        const sourceId = makeNodeId(sourceNode);
+        const sourceRuntime = ensureNodeRuntimeState(sourceId);
+        sourceRuntime.applicationBuffer = Math.max(1, payload.packetBatches);
+        sourceRuntime.handshake = payload.packetBatches > 0 ? 'primed' : 'idle';
+        sourceRuntime.sendBuffer = payload.packetBatches > 0 ? 'primed' : 'idle';
+        sourceRuntime.lastUpdated = performance.now();
+    });
+    if (isNodePanelOpen()) {
+        updateNodePanelContent();
     }
 }
 
@@ -3660,21 +5487,33 @@ function prepareRoute(payload, options = {}) {
 }
 
 function playAnimation() {
-    if (multiRunState) {
-        if (
-            multiRunState.mode === 'parallel'
-            && Array.isArray(multiRunState.payloads)
-            && multiRunState.payloads.length
-        ) {
-            startAnimation(multiRunState.payloads[0], {
-                parallelPayloads: multiRunState.payloads,
-                label: 'Animate all',
-                onComplete: () => {
-                    hudStatus.textContent = 'Parallel transmissions complete';
-                },
-            });
+    if (
+        multiRunState
+        && (multiRunState.mode === 'parallel' || multiRunState.mode === 'nm')
+    ) {
+        const payloadList = multiRunState.mode === 'nm'
+            ? multiRunState.packetPayloads || []
+            : multiRunState.payloads || [];
+        if (!Array.isArray(payloadList) || !payloadList.length) {
+            hudStatus.textContent = 'Simulate the route first.';
             return;
         }
+        const completionMessage = multiRunState.mode === 'nm'
+            ? 'n → m plan complete'
+            : 'Parallel transmissions complete';
+        startAnimation(payloadList[0], {
+            parallelPayloads: payloadList,
+            parallelOptions: {
+                mode: multiRunState.mode,
+                queueConfig: multiRunState.queueConfig || null,
+                routeSummary: multiRunState.routeQueueSummary || null,
+            },
+            label: 'Animate all',
+            onComplete: () => {
+                hudStatus.textContent = completionMessage;
+            },
+        });
+        return;
     }
 
     if (!lastRoutePayload) {
@@ -3690,6 +5529,7 @@ function startAnimation(payload, options = {}) {
         onComplete: null,
         label: null,
         parallelPayloads: null,
+        parallelOptions: null,
         ...options,
     };
 
@@ -3705,7 +5545,7 @@ function startAnimation(payload, options = {}) {
     resetAllNodeRuntimeState();
     routePreview = null;
     if (Array.isArray(opts.parallelPayloads) && opts.parallelPayloads.length) {
-        animationState = new ParallelRouteController(opts.parallelPayloads, speedMultiplier);
+        animationState = new ParallelRouteController(opts.parallelPayloads, speedMultiplier, opts.parallelOptions || {});
     } else {
         animationState = new RouteAnimation(payload, speedMultiplier);
     }
@@ -3734,13 +5574,22 @@ function startAnimation(payload, options = {}) {
         if (!animationState) return;
         animationState.update(timestamp);
 
-        if (animationState.mode === 'parallel' && Array.isArray(animationState.animations)) {
-            const statuses = animationState.animations.map((animation) => animation.currentStatus());
+        if (animationState.mode === 'parallel' || animationState.mode === 'nm') {
+            const activeEntries = typeof animationState.getActiveEntries === 'function'
+                ? animationState.getActiveEntries()
+                : Array.isArray(animationState.animations)
+                    ? animationState.animations.map((animation, index) => ({ animation, routeIndex: index }))
+                    : [];
+            const animations = activeEntries.map((entry) => entry.animation).filter(Boolean);
+            const statuses = animations.map((animation) => animation.currentStatus());
             animationState.latestStatuses = statuses;
-            const aggregate = aggregateParallelStatuses(statuses);
+            const aggregate = aggregateParallelStatuses(statuses, {
+                mode: multiRunState?.mode || null,
+                routeSummary: multiRunState?.routeQueueSummary || null,
+            });
             updateStatusBar(aggregate);
-            statuses.forEach((status, index) => updateNodeRuntimeFromStatus(status, animationState.animations[index]));
-            updateParallelRouteProgress(statuses);
+            statuses.forEach((status, index) => updateNodeRuntimeFromStatus(status, animations[index]));
+            updateParallelRouteProgress(statuses, activeEntries);
         } else {
             const status = animationState.currentStatus();
             animationState.latestStatus = status;
@@ -3771,16 +5620,26 @@ function startAnimation(payload, options = {}) {
             : animationState.isComplete();
 
         if (isComplete) {
-            hudStatus.textContent = animationState.mode === 'parallel'
-                ? 'Parallel transmissions complete'
-                : 'Transmission complete';
+            const multiMode = multiRunState?.mode || null;
+            const completionMessage = multiMode === 'nm'
+                ? 'n → m plan complete'
+                : animationState.mode === 'parallel'
+                    ? 'Parallel transmissions complete'
+                    : 'Transmission complete';
+            const transferLabel = multiMode === 'nm'
+                ? 'Routes delivered'
+                : animationState.mode === 'parallel'
+                    ? 'Packets delivered'
+                    : 'Packet delivered';
+
+            hudStatus.textContent = completionMessage;
             highlightFlowCard(flowCardElements.length - 1);
             const completedStatus = {
                 phaseKey: 'completed',
                 phaseLabel: 'Completed',
                 signalText: 'Idle',
                 signalStates: { req: 'sleep', ack: 'sleep', data: 'sleep' },
-                transferText: animationState.mode === 'parallel' ? 'Packets delivered' : 'Packet delivered',
+                transferText: transferLabel,
                 progressPercent: 100,
                 hopText: statusElements.hopValue.textContent,
                 nodesText: statusElements.hopNodes.textContent,
@@ -3797,6 +5656,7 @@ function startAnimation(payload, options = {}) {
                         segment: finalSegment,
                         phaseKey: 'completed',
                         phaseLabel: 'Completed',
+                        transferText: transferLabel,
                     };
                     const context = Array.isArray(animationState?.animations)
                         ? animationState.animations[index]
@@ -3814,7 +5674,7 @@ function startAnimation(payload, options = {}) {
                 }
             }
             if (multiRunState && Array.isArray(multiRunState.previewRoutes)) {
-                if (multiRunState.mode === 'parallel') {
+                if (multiRunState.mode === 'parallel' || multiRunState.mode === 'nm') {
                     multiRunState.previewRoutes.forEach((preview) => {
                         if (!preview) return;
                         preview.renderStyle = 'completed';
@@ -3888,6 +5748,8 @@ function resetSimulation() {
     resetAllNodeRuntimeState();
     setStatusIdle();
     hudStatus.textContent = 'Idle';
+    closeLogModal();
+    setDetailedLog([]);
     setNodePanelAutoTracking(autoNodeDetailsPreference);
     routePreview = null;
     lastRoutePayload = null;
@@ -3994,7 +5856,9 @@ if (speedControl) {
         const sliderValue = resolveSpeedSliderValue(event.target.value);
         speedMultiplier = sliderValue * SPEED_SCALE;
         hudStatus.textContent = `Animation speed ×${speedMultiplier.toFixed(1)}`;
+        updateSpeedMenuLabel(event.target.value);
     });
+    updateSpeedMenuLabel(speedControl.value);
 }
 
 if (sidebarToggle) {
@@ -4015,6 +5879,14 @@ if (nodePanelClose) {
 
 document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
+        if (isLogModalOpen()) {
+            closeLogModal();
+            return;
+        }
+        if (speedMenuOpen) {
+            closeSpeedMenu({ focusButton: true });
+            return;
+        }
         if (isNodePanelOverlayMode() && isNodePanelOpen()) {
             closeNodePanel();
             return;
@@ -4031,22 +5903,63 @@ document.addEventListener('keydown', (event) => {
     }
 });
 
+document.addEventListener('click', (event) => {
+    if (!speedMenuOpen) {
+        return;
+    }
+    if (!speedMenuPopover) {
+        speedMenuOpen = false;
+        return;
+    }
+    const withinPopover = speedMenuPopover.contains(event.target);
+    const onButton = speedMenuBtn && speedMenuBtn.contains(event.target);
+    if (!withinPopover && !onButton) {
+        closeSpeedMenu();
+    }
+});
+
+function runSimulationByMode() {
+    const mode = simulationModeSelect ? simulationModeSelect.value : 'single';
+    switch (mode) {
+        case 'parallel':
+            simulateParallelRoutes();
+            break;
+        case 'nm':
+            simulateNmRoutes();
+            break;
+        case 'single':
+        default:
+            simulateSingleRoute();
+            break;
+    }
+}
+
 if (simulateBtn) {
-    simulateBtn.addEventListener('click', () => {
-        const mode = simulationModeSelect ? simulationModeSelect.value : 'single';
-        switch (mode) {
-            case 'parallel':
-                simulateParallelRoutes();
-                break;
-            case 'single':
-            default:
-                simulateSingleRoute();
-                break;
-        }
+    simulateBtn.addEventListener('click', runSimulationByMode);
+}
+if (canvasSimulateBtn) {
+    canvasSimulateBtn.addEventListener('click', () => {
+        runSimulationByMode();
+        closeSpeedMenu();
     });
 }
 if (animateBtn) {
     animateBtn.addEventListener('click', playAnimation);
+}
+if (playPauseAnimationBtn) {
+    playPauseAnimationBtn.addEventListener('click', () => {
+        if (animationState) {
+            togglePauseAnimation();
+        } else {
+            playAnimation();
+        }
+    });
+}
+if (speedMenuBtn) {
+    speedMenuBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        toggleSpeedMenu();
+    });
 }
 resetBtn.addEventListener('click', resetSimulation);
 
@@ -4066,18 +5979,13 @@ if (destinationSelect) {
 
 if (destinationCandidateSelect) {
     destinationCandidateSelect.addEventListener('change', () => {
-        setPickMode(null);
-        if (hudStatus) {
-            const meta = parseSelectValue(destinationCandidateSelect.value);
-            hudStatus.textContent = `Candidate destination: ${safeNodeLabel(meta)}.`;
+        if (suppressCandidateSelectChange) {
+            suppressCandidateSelectChange = false;
+            return;
         }
-    });
-}
-
-if (addMultiDestinationBtn) {
-    addMultiDestinationBtn.addEventListener('click', () => {
-        if (!destinationCandidateSelect) return;
-        addMultiDestination(destinationCandidateSelect.value);
+        const value = destinationCandidateSelect.value;
+        if (!value) return;
+        addMultiDestination(value);
     });
 }
 
@@ -4085,6 +5993,34 @@ if (clearMultiDestinationsBtn) {
     clearMultiDestinationsBtn.addEventListener('click', () => {
         clearMultiDestinationList();
     });
+}
+
+if (addNmRouteBtn) {
+    addNmRouteBtn.addEventListener('click', () => {
+        const route = addNmRouteRow();
+        if (route && hudStatus) {
+            hudStatus.textContent = 'Route row added. Use Src/Des to choose nodes from the canvas.';
+        }
+    });
+}
+
+if (clearNmRoutesBtn) {
+    clearNmRoutesBtn.addEventListener('click', () => {
+        clearNmRoutes({ announce: true });
+    });
+}
+
+if (openLogModalBtn) {
+    openLogModalBtn.addEventListener('click', openLogModal);
+}
+if (exportLogPdfBtn) {
+    exportLogPdfBtn.addEventListener('click', exportLogAsPdf);
+}
+if (logModalClose) {
+    logModalClose.addEventListener('click', closeLogModal);
+}
+if (logModalOverlay) {
+    logModalOverlay.addEventListener('click', closeLogModal);
 }
 
 if (multiDestinationList) {
@@ -4172,10 +6108,6 @@ if (cursorModeBtn) {
     cursorModeBtn.classList.toggle('is-active', scrollZoomEnabled);
 }
 
-if (pauseAnimationBtn) {
-    pauseAnimationBtn.addEventListener('click', togglePauseAnimation);
-}
-
 if (restartAnimationBtn) {
     restartAnimationBtn.addEventListener('click', restartAnimation);
 }
@@ -4224,11 +6156,21 @@ renderMultiDestinationList();
 function applySimulationModeUI(mode) {
     const normalizedMode = mode || (simulationModeSelect ? simulationModeSelect.value : 'single');
     const isParallel = normalizedMode === 'parallel';
-    setElementVisibility(singleDestinationField, !isParallel);
-    setElementVisibility(multiDestinationField, isParallel);
-    if (multiRouteList) {
-        multiRouteList.style.display = isParallel ? multiRouteList.style.display : 'none';
+    const isNm = normalizedMode === 'nm';
+
+    setPickMode(null);
+
+    if (sourceField) {
+        setElementVisibility(sourceField, !isNm);
     }
+    setElementVisibility(singleDestinationField, normalizedMode === 'single');
+    setElementVisibility(multiDestinationField, isParallel);
+    setElementVisibility(nmRouteField, isNm);
+
+    if (multiRouteList) {
+        multiRouteList.style.display = 'none';
+    }
+
     if (isParallel) {
         currentDestinationId = null;
         if (destinationCandidateSelect) {
@@ -4241,14 +6183,25 @@ function applySimulationModeUI(mode) {
             }
         }
         renderMultiDestinationList();
+        syncSelectionState();
+    } else if (isNm) {
+        currentSourceId = null;
+        currentDestinationId = null;
+        if (!nmRoutes.length) {
+            addNmRouteRow();
+        } else {
+            refreshNmRouteOptions();
+        }
     } else {
         syncSelectionState();
     }
-    if (isParallel) {
+
+    if (isParallel || isNm) {
         updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
     } else {
         updateAnimateButton({ disabled: true, busy: false, label: animateBtn?.dataset?.defaultLabel });
     }
+
     renderTopology();
 }
 
@@ -4263,6 +6216,8 @@ if (simulationModeSelect) {
         summary.textContent = '';
         if (simulationModeSelect.value === 'parallel') {
             hudStatus.textContent = 'Parallel mode selected. Choose multiple destinations to animate together.';
+        } else if (simulationModeSelect.value === 'nm') {
+            hudStatus.textContent = 'n → m mode selected. Add rows to the route plan table to define transmissions.';
         } else {
             hudStatus.textContent = '1 → 1 mode selected. Pick single destination to simulate.';
         }
@@ -4279,6 +6234,8 @@ syncSidebarForViewport();
 syncNodePanelMode();
 updateAnimateButton({ disabled: true, busy: false });
 updateAnimationControlState();
+
+setDetailedLog([]);
 
 fetchTopology()
     .then(() => {
