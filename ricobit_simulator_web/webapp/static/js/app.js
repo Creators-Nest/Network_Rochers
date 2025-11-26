@@ -276,12 +276,14 @@ function defaultInterfaceRuntime(metaInterface = null) {
             head: null,
             state: 'idle',
             queue: 0,
+            pendingDestinations: [],
         },
         receiveBuffer: {
             used: 0,
             capacity: receiveCapacity,
             head: null,
             state: 'idle',
+            pendingDestinations: [],
         },
         statusBits: {
             busy: false,
@@ -981,7 +983,7 @@ function updateBufferChip(element, state, textOverride) {
     element.textContent = textOverride || label;
 }
 
-function applyBufferRuntime(buffer, { used, state, head } = {}) {
+function applyBufferRuntime(buffer, { used, state, head, pendingDestinations } = {}) {
     if (!buffer || typeof buffer !== 'object') return;
     if (Number.isFinite(used)) {
         if (Number.isFinite(buffer.capacity) && buffer.capacity > 0) {
@@ -998,6 +1000,9 @@ function applyBufferRuntime(buffer, { used, state, head } = {}) {
     }
     if (state) {
         buffer.state = state;
+    }
+    if (Array.isArray(pendingDestinations)) {
+        buffer.pendingDestinations = pendingDestinations.slice();
     }
 }
 
@@ -1231,6 +1236,7 @@ function resolveBufferSnapshot(metaSnapshot, runtimeSnapshot) {
             head: null,
             state: null,
             queue: 0,
+            pendingDestinations: [],
         };
     }
     const used = Number(runtimeSnapshot?.used ?? metaSnapshot?.used ?? 0) || 0;
@@ -1238,12 +1244,18 @@ function resolveBufferSnapshot(metaSnapshot, runtimeSnapshot) {
     const head = runtimeSnapshot?.head ?? metaSnapshot?.head ?? null;
     const state = runtimeSnapshot?.state ?? metaSnapshot?.state ?? null;
     const queue = Number(runtimeSnapshot?.queue ?? metaSnapshot?.queue ?? 0) || 0;
+    const pending = Array.isArray(runtimeSnapshot?.pendingDestinations)
+        ? runtimeSnapshot.pendingDestinations
+        : Array.isArray(metaSnapshot?.pendingDestinations)
+            ? metaSnapshot.pendingDestinations
+            : [];
     return {
         used,
         capacity,
         head,
         state,
         queue,
+        pendingDestinations: pending,
     };
 }
 
@@ -1715,19 +1727,84 @@ function updateNodePanelContent() {
 
     const interfaces = Array.isArray(meta.interfaces) ? meta.interfaces : [];
     const runtimeInterfaces = runtime?.interfaces instanceof Map ? runtime.interfaces : null;
-    const aggregateBuffers = (key) => interfaces.reduce((acc, iface) => {
-        if (!iface) return acc;
-        const neighborId = iface.neighbor ? makeNodeId(iface.neighbor) : null;
-        const runtimeOverlay = neighborId && runtimeInterfaces?.get(neighborId) ? runtimeInterfaces.get(neighborId) : null;
-        const snapshot = resolveBufferSnapshot(iface?.[key], runtimeOverlay?.[key]);
-        acc.used += Number(snapshot.used || 0);
-        acc.capacity += Number(snapshot.capacity || 0);
-        acc.queue += Number(snapshot.queue || 0);
-        return acc;
-    }, { used: 0, capacity: 0, queue: 0 });
 
-    const sendTotals = aggregateBuffers('sendBuffer');
-    const recvTotals = aggregateBuffers('receiveBuffer');
+    const activeNeighborIds = new Set();
+    if (currentRouteInfo && Array.isArray(currentRouteInfo.path) && currentRouteInfo.path.length) {
+        const pathIndex = currentRouteInfo.path.findIndex((node) => makeNodeId(node) === selectedNodeId);
+        if (pathIndex !== -1) {
+            if (pathIndex > 0) {
+                const previous = currentRouteInfo.path[pathIndex - 1];
+                activeNeighborIds.add(makeNodeId(previous));
+            }
+            if (pathIndex < currentRouteInfo.path.length - 1) {
+                const next = currentRouteInfo.path[pathIndex + 1];
+                activeNeighborIds.add(makeNodeId(next));
+            }
+        }
+    }
+
+    const sendTotals = { used: 0, capacity: 0, queue: 0 };
+    const recvTotals = { used: 0, capacity: 0, queue: 0 };
+    const activeSendTotals = { used: 0, capacity: 0, queue: 0 };
+    const activeRecvTotals = { used: 0, capacity: 0, queue: 0 };
+    const activeSendDetails = [];
+    const activeRecvDetails = [];
+    const aggregatePending = new Map();
+
+    interfaces.forEach((iface) => {
+        if (!iface) return;
+        const neighbor = iface.neighbor || null;
+        const neighborId = neighbor ? makeNodeId(neighbor) : null;
+        const runtimeOverlay = neighborId && runtimeInterfaces?.get(neighborId) ? runtimeInterfaces.get(neighborId) : null;
+
+        const sendSnapshot = resolveBufferSnapshot(iface.sendBuffer, runtimeOverlay?.sendBuffer);
+        sendTotals.used += Number(sendSnapshot.used || 0);
+        sendTotals.capacity += Number(sendSnapshot.capacity || 0);
+        sendTotals.queue += Number(sendSnapshot.queue || 0);
+        const pendingList = Array.isArray(sendSnapshot.pendingDestinations)
+            ? sendSnapshot.pendingDestinations
+            : [];
+        pendingList.forEach((item) => {
+            if (!item || !item.destination) return;
+            const { destination, count } = item;
+            if (!Number.isFinite(destination?.ring) || !Number.isFinite(destination?.index)) {
+                return;
+            }
+            const key = makeNodeId(destination);
+            const existing = aggregatePending.get(key) || { destination, count: 0 };
+            existing.count += Number(count || 0);
+            aggregatePending.set(key, existing);
+        });
+        if (neighborId && activeNeighborIds.has(neighborId)) {
+            activeSendTotals.used += Number(sendSnapshot.used || 0);
+            activeSendTotals.capacity += Number(sendSnapshot.capacity || 0);
+            activeSendTotals.queue += Number(sendSnapshot.queue || 0);
+            activeSendDetails.push({
+                label: neighbor ? nodeLabel(neighbor) : neighborId,
+                used: Number(sendSnapshot.used || 0),
+                capacity: Number(sendSnapshot.capacity || 0),
+                queue: Number(sendSnapshot.queue || 0),
+                pendingDestinations: pendingList,
+            });
+        }
+
+        const recvSnapshot = resolveBufferSnapshot(iface.receiveBuffer, runtimeOverlay?.receiveBuffer);
+        recvTotals.used += Number(recvSnapshot.used || 0);
+        recvTotals.capacity += Number(recvSnapshot.capacity || 0);
+        recvTotals.queue += Number(recvSnapshot.queue || 0);
+        if (neighborId && activeNeighborIds.has(neighborId)) {
+            activeRecvTotals.used += Number(recvSnapshot.used || 0);
+            activeRecvTotals.capacity += Number(recvSnapshot.capacity || 0);
+            activeRecvTotals.queue += Number(recvSnapshot.queue || 0);
+            activeRecvDetails.push({
+                label: neighbor ? nodeLabel(neighbor) : neighborId,
+                used: Number(recvSnapshot.used || 0),
+                capacity: Number(recvSnapshot.capacity || 0),
+                queue: Number(recvSnapshot.queue || 0),
+            });
+        }
+    });
+
     const formatTotal = (totals) => {
         const { used, capacity, queue } = totals;
         if (capacity > 0) {
@@ -1738,8 +1815,67 @@ function updateNodePanelContent() {
         return `${used} slot${used === 1 ? '' : 's'}${queueText}`;
     };
 
-    updateBufferChip(nodePanelSendBuffer, runtime.sendBuffer, formatTotal(sendTotals));
-    updateBufferChip(nodePanelReceiveBuffer, runtime.receiveBuffer, formatTotal(recvTotals));
+    const formatPendingList = (pendingList, limit = 3) => {
+        if (!Array.isArray(pendingList) || !pendingList.length) {
+            return '';
+        }
+        const trimmed = pendingList
+            .filter((item) => item && item.destination && Number.isFinite(item.count))
+            .slice(0, limit);
+        if (!trimmed.length) {
+            return '';
+        }
+        const parts = trimmed.map((item) => {
+            const { destination, count } = item;
+            return `${nodeLabel(destination)}×${count}`;
+        });
+        if (pendingList.length > limit) {
+            parts.push('…');
+        }
+        return parts.join(', ');
+    };
+
+    const formatActiveDetails = (details, totals) => {
+        if (!details.length) {
+            return totals.used > 0 || totals.queue > 0 ? formatTotal(totals) : 'Idle';
+        }
+        return details
+            .map((entry) => {
+                const { used, capacity, queue, label, pendingDestinations } = entry;
+                const base = capacity > 0
+                    ? `${used} / ${capacity}`
+                    : `${used}`;
+                const queueText = queue > 0 ? ` (queue ${queue})` : '';
+                const pendingText = formatPendingList(pendingDestinations, 3);
+                const pendingInfo = pendingText ? ` · Pending ${pendingText}` : '';
+                return `${label}: ${base}${queueText}${pendingInfo}`;
+            })
+            .join(', ');
+    };
+
+    // Keep all the logic but only display simplified slots count
+    let sendDisplay = formatTotal(sendTotals);
+    // Logic kept for internal state but not shown in UI
+    if (activeNeighborIds.size) {
+        // Calculate active route details for diagnostics without surfacing them in the UI
+        formatActiveDetails(activeSendDetails, activeSendTotals);
+    }
+    const aggregatePendingList = Array.from(aggregatePending.values())
+        .filter((item) => item && item.destination && Number.isFinite(item.count) && item.count > 0)
+        .sort((a, b) => (b.count - a.count) || makeNodeId(a.destination).localeCompare(makeNodeId(b.destination)));
+    if (aggregatePendingList.length) {
+        // Generate pending summary for potential telemetry but keep the UI focused on totals
+        formatPendingList(aggregatePendingList, 4);
+    }
+
+    let receiveDisplay = formatTotal(recvTotals);
+    if (activeNeighborIds.size) {
+        formatActiveDetails(activeRecvDetails, activeRecvTotals);
+        
+    }
+
+    updateBufferChip(nodePanelSendBuffer, runtime.sendBuffer, sendDisplay);
+    updateBufferChip(nodePanelReceiveBuffer, runtime.receiveBuffer, receiveDisplay);
 
     const appBuffer = meta.applicationBuffer || {};
     const appCount = Number(appBuffer.count || 0);
@@ -5712,6 +5848,18 @@ function startAnimation(payload, options = {}) {
                 treeColor: completedPreviewColors?.treeColor,
                 ringColor: completedPreviewColors?.ringColor,
             });
+            // Reset all node handshake states to idle after transfer completes
+            nodeRuntimeState.forEach((runtime) => {
+                if (runtime) {
+                    runtime.handshake = 'idle';
+                    runtime.sendBuffer = 'idle';
+                    runtime.receiveBuffer = 'idle';
+                }
+            });
+            // Update node panel to reflect idle state
+            if (selectedNodeId) {
+                updateNodePanelContent();
+            }
             const onComplete = typeof opts.onComplete === 'function' ? opts.onComplete : null;
             animationState = null;
             animationOptions = null;

@@ -81,6 +81,10 @@ class Interface:
         if not self.connected_interface:
             return
         
+        # Clear CHOKE once backpressure condition goes away so the sender can retry.
+        if self.pin_CHOKE and not self.receive_buffer.is_full():
+            self.pin_CHOKE = False
+
         # State: Idle - Check for incoming REQ
         if not self.bit_Busy and not self.bit_Receive:
             if self.connected_interface.pin_REQ:

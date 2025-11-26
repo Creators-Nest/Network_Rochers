@@ -82,16 +82,38 @@ class AppState:
 
         def _buffer_snapshot(buffer) -> Dict[str, object]:
             if buffer is None or not hasattr(buffer, "buffer"):
-                return {"used": 0, "capacity": 0, "head": None}
+                return {
+                    "used": 0,
+                    "capacity": 0,
+                    "head": None,
+                    "pendingDestinations": [],
+                }
 
             store = buffer.buffer
             used = len(store)
             capacity = getattr(store, "maxlen", 0) or 0
             head_packet = next(iter(store), None)
+            destination_counts: Dict[Tuple[int, int], int] = {}
+            for packet in store:
+                dest_address = getattr(packet, "dest_address", None)
+                if isinstance(dest_address, tuple) and len(dest_address) == 2:
+                    if isinstance(dest_address[0], int) and isinstance(dest_address[1], int):
+                        destination_counts[dest_address] = destination_counts.get(dest_address, 0) + 1
+
+            pending_destinations = [
+                {
+                    "destination": {"ring": ring, "index": index},
+                    "count": count,
+                }
+                for (ring, index), count in sorted(
+                    destination_counts.items(), key=lambda item: (-item[1], item[0])
+                )
+            ]
             return {
                 "used": used,
                 "capacity": capacity,
                 "head": self._serialize_packet(head_packet),
+                "pendingDestinations": pending_destinations,
             }
 
         busy_interface_count = 0
