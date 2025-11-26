@@ -545,7 +545,8 @@
             100% { transform: translateX(-50%); }
         }
         .card {
-            background:linear-gradient(rgb(10, 10, 10),rgb(10, 10, 10),rgba(10, 10, 10, 0.54), rgb(15 85 104));
+            /*At botton right corder with gradient overlay*/
+            background: radial-gradient(circle at 100% 100%, rgba(15,85,104,0.65) 0%, rgba(0,0,0,0.54) 30%, rgba(0,0,0,1) 100%);
             padding: 24px;
             border-radius: 24px;
             border: 1px solid rgba(0, 212, 255, 0.2);
@@ -580,7 +581,6 @@
             border-color: #00D4FF; 
             transform: translateY(-8px); 
             box-shadow: 0 20px 60px rgba(0, 212, 255, 0.2);
-            background: rgba(0, 0, 0, 0.897);
         }
         .card:hover::before,
         .card:hover::after {
@@ -1256,7 +1256,7 @@
             </header>
             
             <div class="card-wrapper" style="gap:10px;">
-                <div class="steps-grid">
+                <div class="card-grid">
                 <article class="card dotted step-card">
                     <h3>Configure the fabric</h3>
                     <p>
@@ -1316,7 +1316,7 @@
                 </article>
             </div>
             </div>
-            <div class="cta-card dotted">
+            <div class="cta-card dotted" style="margin-top: 50px;">
                 <div>
                     <h3>Ready to see routes come alive?</h3>
                     <p>
@@ -1330,7 +1330,7 @@
             </div>
         </section>
     </main>
-    <footer class="home-footer">
+    <footer class="home-footer" style=" position: relative;">
         <p>&copy; 2025 RicoBit Simulator · Built for Network Rochers.</p>
         <p class="footer-note">
             Open-source · Flask backend · Canvas-based visualization

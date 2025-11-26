@@ -124,12 +124,21 @@
         <section class="content-region">
             <header class="status-bar" role="status">
                 <div class="status-bar__surface">
-                    <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-expanded="false" aria-controls="layoutSidebar">
-                        <span class="sidebar-toggle__bar"></span>
-                        <span class="sidebar-toggle__bar"></span>
-                        <span class="sidebar-toggle__bar"></span>
-                        <span class="sr-only">Toggle controls</span>
-                    </button>
+                    <div class="sidebar-toggle__wrap">
+                        <div class="sidebar-toggle__meta" aria-hidden="true">
+                            <span class="sidebar-toggle__label-text">Sidebar</span>
+                            
+                        </div>
+                        <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-expanded="false" aria-controls="layoutSidebar">
+                            <span class="sidebar-toggle__icon" aria-hidden="true">
+                                <svg viewBox="0 0 20 20" focusable="false">
+                                    <path d="M4 6h12M4 10h12M4 14h12" />
+                                </svg>
+                            </span>
+                            <span class="sr-only">Toggle controls</span>
+                        </button>
+                        
+                    </div>
 
                     <div class="status-grid">
                         <section class="status-card status-card--compact status-card--hop" aria-live="polite">
