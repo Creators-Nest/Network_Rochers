@@ -130,7 +130,7 @@
         }
         h1 { 
             font-family: 'Space Grotesk', sans-serif;
-            font-size: 4.5rem; 
+            font-size: 4rem; 
             font-weight: 700; 
             line-height: 1.05; 
             margin-bottom: 24px; 
@@ -142,7 +142,7 @@
         }
         h2 { 
             font-family: 'Space Grotesk', sans-serif;
-            font-size: 3rem; 
+            font-size: 2.5rem; 
             font-weight: 700; 
             line-height: 1.15; 
             margin-bottom: 24px;
@@ -150,14 +150,14 @@
         }
         h3 { 
             font-family: 'Space Grotesk', sans-serif;
-            font-size: 1.5rem; 
+            font-size: 1rem; 
             font-weight: 600; 
             margin-bottom: 16px;
             letter-spacing: -0.01em;
         }
         p { 
-            font-size: 1.0625rem; 
-            margin-bottom: 20px; 
+            font-size: 0.8rem; 
+            margin-bottom: 15px; 
             opacity: 0.88;
             line-height: 1.7;
             font-weight: 400;
@@ -168,7 +168,7 @@
             padding-left: 28px; 
             position: relative; 
             opacity: 0.88;
-            font-size: 1rem;
+            font-size: 0.75rem;
             line-height: 1.6;
         }
         li:before { 
@@ -177,7 +177,7 @@
             position: absolute; 
             left: 0; 
             font-weight: 700;
-            font-size: 1.125rem;
+            font-size: 0.9rem;
         }
 
         /* Header */
@@ -242,12 +242,12 @@
             gap: 80px;
             align-items: start;
             margin-bottom: 140px;
-            padding: 100px 0 0;
+            padding: 140px 0 0;
             position: relative;
         }
         .hero-left { padding-right: 40px; }
         .hero-subtitle { 
-            font-size: 1.25rem; 
+            font-size: 0.75rem; 
             margin-bottom: 48px; 
             max-width: 90%;
             opacity: 0.85;
@@ -261,18 +261,18 @@
         }
         .hero-metrics {
             display: flex;
-            gap: 20px;
-            flex-wrap: wrap;
+            flex-direction: row;
+            gap: 15px;
             align-items: flex-end;
         }
         .metric-card {
             background: rgba(10, 10, 10, 0.6);
             backdrop-filter: blur(20px);
             text-align: center;
-            padding: 24px 28px;
+            padding: 5px 10px;
             border: 1px solid rgba(0, 212, 255, 0.2);
             border-radius: 20px;
-            min-width: 150px;
+            min-width: 130px;
             transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
             position: relative;
             overflow: hidden;
@@ -300,14 +300,14 @@
         .metric-value { 
             display: block; 
             font-family: 'JetBrains Mono', monospace;
-            font-size: 2.5rem; 
+            font-size: 2rem; 
             font-weight: 700; 
             color: #00D4FF; 
             margin-bottom: 6px;
             letter-spacing: -0.02em;
         }
         .metric-label { 
-            font-size: 0.8125rem; 
+            font-size: 0.75rem; 
             opacity: 0.7; 
             letter-spacing: 0.03em;
             font-weight: 500;
@@ -480,7 +480,7 @@
             font-size: 0.8125rem; 
             opacity: 0.6; 
             text-align: center; 
-            margin-top: 24px; 
+            margin-top: 28px; 
             font-style: italic;
             font-weight: 400;
         }
@@ -488,12 +488,11 @@
         /* Section Styles */
         .home-section {
             margin-bottom: 140px;
-            padding: 100px 0;
             position: relative;
         }
         .section-header {
             text-align: left;
-            margin-bottom: 64px;
+            margin-bottom: 24px;
             max-width: 800px;
         }
         .section-header.center { 
@@ -514,6 +513,37 @@
             grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
             gap: 32px;
         }
+        .card-wrapper {
+            overflow-x: auto;
+            padding: 20px;
+            width: 100%;
+            scrollbar-width: none; /* Firefox */
+            -ms-overflow-style: none; /* IE and Edge */
+            position: relative;
+            mask: linear-gradient(to right, transparent 0%, black 5%, black 95%, transparent 100%);
+            -webkit-mask: linear-gradient(to right, transparent 0%, black 5%, black 95%, transparent 100%);
+        }
+        
+        .card-grid {
+            display: flex;
+            flex-direction: row;
+            gap: 32px;
+            overflow: hidden;
+            width: fit-content;
+            scroll-behavior: smooth;
+            padding-left: 5vw;
+            padding-top: 30px;
+            will-change: transform;
+        }
+        .card-grid .card {
+            flex-shrink: 0;
+            width: 340px;
+            font-size: 1rem;
+        }
+        @keyframes scrollCards {
+            0% { transform: translateX(0); }
+            100% { transform: translateX(-50%); }
+        }
         .card {
             background: rgba(10, 10, 10, 0.6);
             backdrop-filter: blur(20px);
@@ -523,7 +553,7 @@
             transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
             position: relative;
             overflow: hidden;
-            top:50px;
+            font-size: 0.6rem;
         }
         .card::before {
             content: '';
@@ -535,6 +565,7 @@
             background: linear-gradient(90deg, transparent, rgba(0, 212, 255, 0.4), transparent);
             opacity: 0;
             transition: opacity 0.4s ease;
+            z-index: 10;
         }
         .card::after {
             content: '';
@@ -543,6 +574,7 @@
             background: radial-gradient(circle at top left, rgba(0, 212, 255, 0.05), transparent);
             opacity: 0;
             transition: opacity 0.4s ease;
+            z-index: 10;
         }
         .card:hover { 
             border-color: #00D4FF; 
@@ -556,7 +588,6 @@
         }
         .step-card { 
             text-align: center;
-            padding-top: 60px;
         }
         .step-index {
             position: absolute;
@@ -578,9 +609,6 @@
             box-shadow: 0 6px 20px rgba(0, 212, 255, 0.5), 0 0 0 4px rgba(0, 0, 0, 0.8);
             /* It should be on top of the card */
             z-index: 1;
-            
-
-            
         }
         .cards-row { 
             display: grid; 
@@ -633,43 +661,370 @@
         }
 
         /* Responsive Design */
+        @media (max-width: 1200px) {
+            .home-main { padding: 0 32px; }
+            h1 { font-size: 4rem; }
+            .hero-window { padding: 28px; }
+        }
+
         @media (max-width: 1024px) {
             .home-hero { 
                 grid-template-columns: 1fr; 
-                gap: 56px; 
-                text-align: center; 
+                gap: 64px; 
+                text-align: center;
+                padding: 140px 0 0;
             }
             .hero-left { padding-right: 0; order: 2; }
-            .hero-right { order: 1; }
+            .hero-right { order: 1; max-width: 600px; margin: 0 auto; }
             .home-actions { justify-content: center; flex-wrap: wrap; }
             .hero-metrics { justify-content: center; }
+            .hero-subtitle { max-width: 100%; }
             h1 { font-size: 3.5rem; }
-            h2 { font-size: 2.5rem; }
+            h2 { font-size: 2.25rem; }
             .header-inner { padding: 0 32px; }
-            .home-main { padding: 0 32px; }
+            .section-header.center { max-width: 700px; }
         }
+
         @media (max-width: 768px) {
-            .home-section { padding: 64px 0; margin-bottom: 96px; }
-            .card-grid, .steps-grid, .cards-row { grid-template-columns: 1fr; gap: 24px; }
+            .home-header { padding: 14px 0; }
+            .header-inner { 
+                padding: 0 24px;
+                gap: 12px;
+            }
+            .brand-pill { font-size: 1.25rem; }
+            .home-nav { gap: 12px; }
+            .primary-btn, .ghost-btn {
+                padding: 12px 24px;
+                font-size: 0.875rem;
+            }
+            
+            .home-main { padding: 0 24px; }
+            .home-hero { 
+                padding: 60px 0 0;
+                gap: 48px;
+                margin-bottom: 100px;
+            }
+            
+            h1 { font-size: 2.75rem; line-height: 1.1; }
+            h2 { font-size: 2rem; }
+            h3 { font-size: 1.125rem; }
+            
+            .hero-subtitle { 
+                font-size: 1.125rem; 
+                margin-bottom: 36px; 
+            }
+            
+            .home-actions { 
+                flex-direction: column; 
+                align-items: stretch; 
+                gap: 12px;
+                width: 100%;
+                max-width: 400px;
+                margin: 0 auto 48px;
+            }
+            
+            .home-actions .primary-btn,
+            .home-actions .ghost-btn {
+                width: 100%;
+                text-align: center;
+            }
+            
+            .hero-metrics { 
+                justify-content: center;
+                gap: 12px;
+            }
+            .metric-card { 
+                min-width: 110px; 
+                padding: 18px 20px;
+                flex: 1;
+                max-width: 140px;
+            }
+            .metric-value { font-size: 1.75rem; }
+            .metric-label { font-size: 0.6875rem; }
+            
+            .hero-window { 
+                padding: 24px;
+                border-radius: 20px;
+            }
+            .topology-preview { 
+                height: 280px;
+                border-radius: 12px;
+            }
+            .ring-outer { width: 200px; height: 200px; }
+            .ring-inner { width: 130px; height: 130px; top: 35px; left: 35px; }
+            .node { width: 28px; height: 28px; font-size: 0.75rem; }
+            .packet { padding: 6px 12px; font-size: 0.6875rem; }
+            
+            .home-section { margin-bottom: 100px; }
+            .section-body { 
+                font-size: 1rem; 
+                margin: 0 auto 48px;
+                max-width: 100%;
+            }
+            
+            .card-wrapper {
+                padding: 20px 0;
+                overflow-x: scroll;
+                -webkit-overflow-scrolling: touch;
+            }
+            
+            .card-grid {
+                padding-left: 24px;
+                padding-right: 24px;
+            }
+            
+            .card-grid .card {
+                width: 300px;
+            }
+            
+            .card { 
+                padding: 32px 28px;
+                border-radius: 20px;
+            }
+            
+            .steps-grid { 
+                grid-template-columns: 1fr; 
+                gap: 32px; 
+            }
+            
+            .step-card {
+                padding-top: 48px;
+            }
+            
+            .step-index {
+                width: 52px;
+                height: 52px;
+                font-size: 1.375rem;
+                top: 16px;
+            }
+            
+            /* Use-cases: horizontal stack/slider on mobile */
+            .cards-row { 
+                display: flex;
+                gap: 20px;
+                overflow-x: auto;
+                padding: 16px 0 8px;
+                margin-bottom: 40px;
+                scroll-snap-type: x mandatory;
+                -webkit-overflow-scrolling: touch;
+            }
+            .cards-row .card.large {
+                flex: 0 0 80%;
+                min-width: 80%;
+                scroll-snap-align: center;
+                border-radius: 20px;
+            }
+            
             .cta-card { 
                 flex-direction: column; 
                 text-align: center; 
                 gap: 32px; 
-                padding: 40px; 
+                padding: 40px 32px;
+                border-radius: 20px;
             }
-            .home-actions { flex-direction: column; align-items: center; gap: 12px; }
-            h1 { font-size: 2.75rem; }
-            h2 { font-size: 2rem; }
-            .topology-preview { height: 280px; }
-            .metric-card { min-width: 130px; padding: 20px 24px; }
-            .card { padding: 32px; }
+            
+            .cta-card .primary-btn {
+                width: 100%;
+            }
         }
-        @media (max-width: 480px) {
+
+        @media (max-width: 640px) {
+            .home-header { padding: 12px 0; }
+            .header-inner { 
+                padding: 0 20px;
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+            
+            .brand-pill { 
+                font-size: 1.125rem;
+                width: 100%;
+                justify-content: center;
+                margin-bottom: 8px;
+            }
+            
+            .home-nav { 
+                width: 100%;
+                justify-content: center;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+            
             .home-main { padding: 0 20px; }
-            .header-inner { padding: 0 20px; flex-direction: column; gap: 16px; }
-            .home-nav { flex-direction: row; gap: 12px; width: 100%; justify-content: center; }
-            .brand-pill { font-size: 1.125rem; }
-            h1 { font-size: 2.25rem; }
+            
+            .home-hero {
+                padding: 148px 0 0;
+                margin-bottom: 80px;
+            }
+            
+            h1 { 
+                font-size: 2.25rem; 
+                line-height: 1.15;
+                margin-bottom: 20px;
+            }
+            h2 { font-size: 1.75rem; }
+            h3 { font-size: 1rem; }
+            p { font-size: 0.875rem; line-height: 1.65; }
+            li { font-size: 0.875rem; }
+            
+            .eyebrow { font-size: 0.75rem; margin-bottom: 12px; }
+            
+            .hero-subtitle { 
+                font-size: 0.75rem; 
+                margin-bottom: 32px;
+                line-height: 1.65;
+            }
+            
+            .home-actions {
+                max-width: 100%;
+                margin-bottom: 40px;
+            }
+            
+            .hero-metrics {
+                gap: 10px;
+                width: 100%;
+            }
+            
+            .metric-card {
+                min-width: 90px;
+                padding: 16px 14px;
+                border-radius: 16px;
+            }
+            
+            .metric-value { font-size: 1.5rem; }
+            .metric-label { font-size: 0.625rem; }
+            
+            .hero-window {
+                padding: 20px;
+                border-radius: 16px;
+            }
+            
+            .window-header { margin-bottom: 20px; }
+            .window-dot { width: 10px; height: 10px; }
+            .window-title { font-size: 0.8125rem; }
+            
+            .topology-preview {
+                height: 240px;
+            }
+            
+            .ring-outer { width: 170px; height: 170px; }
+            .ring-inner { width: 110px; height: 110px; top: 30px; left: 30px; }
+            .node { width: 24px; height: 24px; font-size: 0.6875rem; }
+            .packet { padding: 5px 10px; font-size: 0.625rem; }
+            
+            .window-footnote { 
+                font-size: 0.75rem; 
+                margin-top: 16px;
+                line-height: 1.5;
+            }
+            
+            .home-section { margin-bottom: 80px; }
+            
+            .section-header { margin-bottom: 20px; }
+            
+            .section-body { 
+                font-size: 0.9375rem; 
+                margin-bottom: 40px;
+                line-height: 1.7;
+            }
+            
+            .card-grid .card {
+                width: 280px;
+            }
+            
+            .card {
+                padding: 28px 24px;
+                border-radius: 16px;
+            }
+            
+            .card h3 { margin-bottom: 12px; }
+            .card p { margin-bottom: 12px; }
+            
+            .step-card {
+                padding-top: 44px;
+            }
+            
+            .step-index {
+                width: 48px;
+                height: 48px;
+                font-size: 1.25rem;
+                top: 14px;
+            }
+            
+            .steps-grid { gap: 24px; }
+            
+            .cta-card {
+                padding: 32px 24px;
+                gap: 24px;
+            }
+            
+            .home-footer {
+                padding: 40px 20px;
+            }
+            
+            .home-footer p { font-size: 0.8125rem; }
+            .footer-note { font-size: 0.75rem; }
+        }
+
+        @media (max-width: 375px) {
+            h1 { font-size: 2rem; }
+            h2 { font-size: 1.625rem; }
+            
+            .hero-subtitle { font-size: 0.6375rem; }
+            
+            .hero-metrics {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .metric-card {
+                max-width: 100%;
+                width: 100%;
+            }
+            
+            .topology-preview { height: 220px; }
+            .ring-outer { width: 150px; height: 150px; }
+            .ring-inner { width: 100px; height: 100px; top: 25px; left: 25px; }
+            
+            .card-grid .card {
+                width: 260px;
+            }
+        }
+        
+        /* Touch optimization */
+        @media (hover: none) and (pointer: coarse) {
+            .primary-btn, .ghost-btn {
+                padding: 14px 28px;
+                -webkit-tap-highlight-color: transparent;
+            }
+            
+            .card:active {
+                transform: translateY(-4px);
+                transition: transform 0.1s ease;
+            }
+            
+            .node:active {
+                transform: scale(1.1);
+            }
+            
+            .metric-card:active {
+                transform: translateY(-2px);
+            }
+        }
+        
+        /* Prevent horizontal scroll */
+        @media (max-width: 768px) {
+            
+            body {
+                overflow-x: hidden;
+
+            }
+            
+            .home-hero,
+            .home-section,
+            .cta-card {
+                overflow-x: hidden;
+            }
         }
     </style>
 </head>
@@ -681,7 +1036,7 @@
         <div class="header-inner">
             <a href="{{ url_for('simulator') }}" class="brand-pill">
                 <span class="brand-dot"></span>
-                <span class="brand-text">RiCoBit Visualizer</span>
+                <span class="brand-text">RicoBit Visualizer</span>
             </a>
             <nav class="home-nav">
                 <a class="ghost-btn" href="https://github.com/Creators-Nest/Network_Rochers"
@@ -702,7 +1057,8 @@
                 <h1>Visualize RiCoBiT routing with clarity</h1>
                 <p class="hero-subtitle">
                     Watch how requests, acknowledgements, and data traverse the RiCoBiT fabric.
-                    Configure rings, pick end-points, and replay the entire handshake — frame by frame.
+                    Configure rings, pick endpoints, and replay the entire handshake — frame by frame.
+                    Experience routing decisions unfold in real-time, making complex network behaviors intuitive and accessible for learners and experts alike.
                 </p>
                 <div class="home-actions">
                     <a class="primary-btn" href="{{ url_for('simulator') }}">Start the simulator</a>
@@ -762,96 +1118,154 @@
                     RiCoBiT (Ring-based Communication Bit) is a topology and routing scheme built
                     around interconnected rings. It focuses on predictable paths, deterministic hop
                     counts, and a clean separation of control and data traffic.
+                    By organizing nodes in concentric rings, RiCoBiT ensures efficient, low-latency communication while simplifying troubleshooting and scalability in distributed systems.
                 </p>
             </header>
-            <div class="card-grid">
-                <article class="card dotted">
-                    <h3>Ring-oriented design</h3>
-                    <p>
-                        Nodes are logically placed on one or more rings. This makes routing decisions
-                        straightforward, reduces ambiguity in next-hop selection, and keeps
-                        visualizations intuitive.
-                    </p>
-                </article>
-                <article class="card dotted">
-                    <h3>REQ / ACK / DATA separation</h3>
-                    <p>
-                        Control messages and payloads are clearly separated into request,
-                        acknowledgement, and data transfers — perfect for teaching protocol design
-                        and timing.
-                    </p>
-                </article>
-                <article class="card dotted">
-                    <h3>Built for education & demos</h3>
-                    <p>
-                        Designed for classrooms, workshops, and research demos where you want to slow
-                        down time, highlight paths, and answer "what actually happened?" in seconds.
-                    </p>
-                </article>
+            <div class="card-wrapper">
+                <div class="card-grid">
+                    <article class="card dotted">
+                        <h3>Ring-oriented design</h3>
+                        <p>
+                            Nodes are logically placed on one or more rings. This makes routing decisions
+                            straightforward, reduces ambiguity in next-hop selection, and keeps
+                            visualizations intuitive.
+                            For instance, packets always follow the shortest ring-based path, eliminating guesswork and enabling precise latency predictions.
+                        </p>
+                    </article>
+                    <article class="card dotted">
+                        <h3>REQ / ACK / DATA separation</h3>
+                        <p>
+                            Control messages and payloads are clearly separated into request,
+                            acknowledgement, and data transfers — perfect for teaching protocol design
+                            and timing.
+                        </p>
+                    </article>
+                    <article class="card dotted">
+                        <h3>Built for education & demos</h3>
+                        <p>
+                            Designed for classrooms, workshops, and research demos where you want to slow
+                            down time, highlight paths, and answer "what actually happened?" in seconds.
+                        </p>
+                    </article>
+                    <article class="card dotted">
+                        <h3>Ring-oriented design</h3>
+                        <p>
+                            Nodes are logically placed on one or more rings. This makes routing decisions
+                            straightforward, reduces ambiguity in next-hop selection, and keeps
+                            visualizations intuitive.
+                            For instance, packets always follow the shortest ring-based path, eliminating guesswork and enabling precise latency predictions.
+                        </p>
+                    </article>
+                    <article class="card dotted">
+                        <h3>REQ / ACK / DATA separation</h3>
+                        <p>
+                            Control messages and payloads are clearly separated into request,
+                            acknowledgement, and data transfers — perfect for teaching protocol design
+                            and timing.
+                        </p>
+                    </article>
+                    <article class="card dotted">
+                        <h3>Built for education & demos</h3>
+                        <p>
+                            Designed for classrooms, workshops, and research demos where you want to slow
+                            down time, highlight paths, and answer "what actually happened?" in seconds.
+                        </p>
+                    </article>
+                    <article class="card dotted">
+                        <h3>Ring-oriented design</h3>
+                        <p>
+                            Nodes are logically placed on one or more rings. This makes routing decisions
+                            straightforward, reduces ambiguity in next-hop selection, and keeps
+                            visualizations intuitive.
+                            For instance, packets always follow the shortest ring-based path, eliminating guesswork and enabling precise latency predictions.
+                        </p>
+                    </article>
+                    <article class="card dotted">
+                        <h3>REQ / ACK / DATA separation</h3>
+                        <p>
+                            Control messages and payloads are clearly separated into request,
+                            acknowledgement, and data transfers — perfect for teaching protocol design
+                            and timing.
+                        </p>
+                    </article>
+                    <article class="card dotted">
+                        <h3>Built for education & demos</h3>
+                        <p>
+                            Designed for classrooms, workshops, and research demos where you want to slow
+                            down time, highlight paths, and answer "what actually happened?" in seconds.
+                        </p>
+                    </article>
+                </div>
             </div>
         </section>
         <!-- FEATURES -->
         <section id="features" class="home-section">
-            <header class="section-header center">
+            <header class="section-header">
                 <p class="eyebrow">Highlights</p>
                 <h2>Everything you need to explain a network on a whiteboard — but animated.</h2>
             </header>
-            <div class="card-grid">
-                <article class="card dotted">
-                    <h3>Interactive topologies</h3>
-                    <p>
-                        Choose ring counts, configure neighbors, and instantly visualize shortest paths
-                        between any source-destination pair.
-                    </p>
-                    <ul class="feature-list">
-                        <li>Multi-ring configurations</li>
-                        <li>Customizable node labels</li>
-                        <li>Live route highlight per packet</li>
-                    </ul>
-                </article>
-                <article class="card dotted">
-                    <h3>Handshake timeline</h3>
-                    <p>
-                        Track REQ, ACK, and DATA activity in a synchronized event log.
-                        Slow down or step through each phase to explain what's going on.
-                    </p>
-                    <ul class="feature-list">
-                        <li>Event-by-event playback</li>
-                        <li>Colored message types</li>
-                        <li>Latency & hop counters</li>
-                    </ul>
-                </article>
-                <article class="card dotted">
-                    <h3>Web-ready experience</h3>
-                    <p>
-                        Responsive, keyboard-accessible, and mobile friendly. Zoom, pan, and toggle
-                        panels without losing the big picture.
-                    </p>
-                    <ul class="feature-list">
-                        <li>Zoomable topology canvas</li>
-                        <li>Collapsible control panel</li>
-                        <li>Keyboard shortcuts for power users</li>
-                    </ul>
-                </article>
+            <!-- wrapped in card-wrapper so mobile behaves like overview -->
+            <div class="card-wrapper">
+                <div class="card-grid">
+                    <article class="card dotted">
+                        <h3>Interactive topologies</h3>
+                        <p>
+                            Choose ring counts, configure neighbors, and instantly visualize shortest paths
+                            between any source-destination pair.
+                            This interactivity allows you to experiment with fault scenarios, such as link failures, and observe how RiCoBiT reroutes packets seamlessly.
+                        </p>
+                        <ul class="feature-list">
+                            <li>Multi-ring configurations</li>
+                            <li>Customizable node labels</li>
+                            <li>Live route highlight per packet</li>
+                        </ul>
+                    </article>
+                    <article class="card dotted">
+                        <h3>Handshake timeline</h3>
+                        <p>
+                            Track REQ, ACK, and DATA activity in a synchronized event log.
+                            Slow down or step through each phase to explain what's going on.
+                            Detailed timestamps and hop counters reveal bottlenecks, making it ideal for analyzing protocol efficiency in real-world network simulations.
+                        </p>
+                        <ul class="feature-list">
+                            <li>Event-by-event playback</li>
+                            <li>Colored message types</li>
+                            <li>Latency & hop counters</li>
+                        </ul>
+                    </article>
+                    <article class="card dotted">
+                        <h3>Web-ready experience</h3>
+                        <p>
+                            Responsive, keyboard-accessible, and mobile friendly. Zoom, pan, and toggle
+                            panels without losing the big picture.
+                        </p>
+                        <ul class="feature-list">
+                            <li>Zoomable topology canvas</li>
+                            <li>Collapsible control panel</li>
+                            <li>Keyboard shortcuts for power users</li>
+                        </ul>
+                    </article>
+                </div>
             </div>
         </section>
         <!-- FLOW / STEPS -->
-        <section class="home-section">
-            <header class="section-header center">
+        <section  class="home-section">
+            <header class="section-header">
                 <p class="eyebrow">Flow</p>
                 <h2>How the simulator fits into your workflow</h2>
             </header>
-            <div class="steps-grid">
+            
+            <div class="card-wrapper" style="gap:10px;">
+                <div class="steps-grid">
                 <article class="card dotted step-card">
-                    <span class="step-index">1</span>
                     <h3>Configure the fabric</h3>
                     <p>
                         Select ring size, layout, and node roles. Set the source and destination and
                         optionally inject faults or broken links.
+                        This setup mirrors real RiCoBiT deployments, allowing you to test routing under various conditions before simulating packet flow.
                     </p>
                 </article>
                 <article class="card dotted step-card">
-                    <span class="step-index">2</span>
                     <h3>Fire the request</h3>
                     <p>
                         Launch a REQ and watch it travel hop-by-hop. RiCoBiT's rules determine the
@@ -859,27 +1273,30 @@
                     </p>
                 </article>
                 <article class="card dotted step-card">
-                    <span class="step-index">3</span>
                     <h3>Inspect the timeline</h3>
                     <p>
                         Use the handshake timeline and event log to explain routing decisions,
                         timing, and any dropped or rerouted packets.
+                        Pause at any point to annotate paths or compare alternative routes, turning complex routing logic into an interactive teaching tool.
                     </p>
                 </article>
+                </div>
             </div>
         </section>
-        <!-- USE-CASE SLIDER (like talks/contact screenshots) -->
-        <section class="home-section">
+        <!-- USE-CASE SLIDER -->
+        <section  class="home-section">
             <header class="section-header">
                 <p class="eyebrow">Use cases</p>
                 <h2>Perfect for classrooms, labs, and research demos</h2>
             </header>
-            <div class="cards-row">
+            <div  class="card-wrapper">
+            <div class="card-grid">
                 <article class="card large dotted">
                     <h3>Teaching networks</h3>
                     <p>
                         Use RiCoBiT Visualizer to show students why certain routes are chosen, and how
                         control messages guarantee reliable delivery.
+                        For example, demonstrate how REQ packets establish paths, fostering deeper understanding of network protocols in introductory computer science courses.
                     </p>
                 </article>
                 <article class="card large dotted">
@@ -887,6 +1304,7 @@
                     <p>
                         Experiment with custom routing logic, visualize alternative paths, and compare
                         behavior before you move to hardware.
+                        This early-stage visualization helps identify inefficiencies, such as unnecessary hops, saving time and resources in full-scale implementations.
                     </p>
                 </article>
                 <article class="card large dotted">
@@ -896,6 +1314,7 @@
                         topologies without drowning them in packet captures.
                     </p>
                 </article>
+            </div>
             </div>
             <div class="cta-card dotted">
                 <div>
@@ -912,10 +1331,22 @@
         </section>
     </main>
     <footer class="home-footer">
-        <p>&copy; {{ current_year }} RicoBit Simulator · Built for Network Rochers.</p>
+        <p>&copy; 2025 RicoBit Simulator · Built for Network Rochers.</p>
         <p class="footer-note">
             Open-source · Flask backend · Canvas-based visualization
         </p>
     </footer>
+    <script>
+        window.addEventListener('scroll', () => {
+            const scrolled = window.scrollY;
+            const cardGrid = document.querySelector('.card-grid');
+            const section = document.querySelector('.home-section'); // assuming the overview section
+            if (cardGrid && section) {
+                const sectionTop = section.offsetTop;
+                const relativeScroll = scrolled - sectionTop;
+                cardGrid.style.transform = `translateX(${-relativeScroll * 0.4}px)`;
+            }
+        });
+    </script>
 </body>
 </html>
