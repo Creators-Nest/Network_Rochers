@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RicoBit Network Visualizer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+</head>
+<body class="simulator-page">
+    <div class="app-shell" id="appShell">
+        <aside class="sidebar" id="layoutSidebar">
+            <header class="sidebar__header">
+                <div class="sidebar__title">
+                    <h1 style="
+                        font-family: 'Space Grotesk', sans-serif;
+                            background: linear-gradient(135deg, #000000 0%, #00D4FF 100%);
+                            -webkit-background-clip: text;
+                            -webkit-text-fill-color: transparent;
+                            background-clip: text;">RiCoBit Visualizer</h1>
+                    <p class="tagline">Interactive packet routing on the web.</p>
+                </div>
+                <button id="sidebarClose" class="sidebar-close" type="button" aria-label="Close controls">&times;</button>
+            </header>
+
+            <div class="sidebar__content">
+                <section class="sidebar__section" aria-labelledby="topology-controls">
+                    <h2 id="topology-controls" 
+                        style="font-family: 'Space Grotesk', sans-serif;">Topology</h2>
+                    <div class="form-control">
+                        <label for="levelInput" style="font-size: small;">Number of rings</label> 
+                        <input id="levelInput" type="number" min="2" max="6" value="4">
+                    </div>
+                    <button id="applyTopologyBtn" class="primary-btn">Apply topology</button>
+                </section>
+
+                <section class="sidebar__section" aria-labelledby="routing-controls">
+                    <h2 id="routing-controls">Routing</h2>
+                    <div class="form-control">
+                        <label for="simulationMode">Simulation type</label>
+                        <select id="simulationMode">
+                            <option value="single">1 → 1</option>
+                            <option value="parallel">1 → n (parallel)</option>
+                            <option value="nm">n → m (parallel)</option>
+                        </select>
+                    </div>
+                    <div class="form-control">
+                        <label for="sourceSelect">🟢 Source node</label>
+                        <div class="input-with-action">
+                            <select id="sourceSelect"></select>
+                            <button id="pickSourceBtn" class="mini-btn" type="button" aria-pressed="false" title="Pick source from canvas">Pick</button>
+                        </div>
+                    </div>
+                    <div class="form-control" data-mode-area="single">
+                        <label for="destinationSelect">🔴 Destination node</label>
+                        <div class="input-with-action">
+                            <select id="destinationSelect"></select>
+                            <button id="pickDestinationBtn" class="mini-btn" type="button" aria-pressed="false" title="Pick destination from canvas">Pick</button>
+                        </div>
+                    </div>
+                    <div class="form-control" data-mode-area="multi" style="display: none;">
+                        <label for="destinationCandidateSelect">🔴 Destination nodes</label>
+                        <div class="input-with-action">
+                            <select id="destinationCandidateSelect"></select>
+                            <button id="clearMultiDestinationsBtn" class="mini-btn" type="button" title="Clear destinations">Clear all</button>
+                            <button id="pickDestinationMultiBtn" class="mini-btn" type="button" aria-pressed="false" title="Pick &amp; add destination from canvas">Pick</button>
+                        </div>
+                        <div id="multiDestinationList" class="destination-list" role="list"></div>
+                        
+                    </div>
+                    <div class="form-control" data-mode-area="nm" style="display: none;">
+                        <label>Route plan</label>
+                        <p class="form-hint">Define source, destination, and packet count for each parallel transmission.</p>
+                        <div class="nm-table-wrapper" role="region" aria-live="polite">
+                            <table class="nm-route-table" aria-label="Parallel route plan">
+                                <thead>
+                                    <tr>
+                                        <th scope="col">Source</th>
+                                        <th scope="col">Destination</th>
+                                        <th scope="col">Packets</th>
+                                        <th scope="col" class="nm-route-table__actions">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="nmRouteTableBody"></tbody>
+                            </table>
+                        </div>
+                        <div class="nm-route-actions">
+                            <button id="addNmRouteBtn" class="mini-btn" type="button">Add route</button>
+                            <button id="clearNmRoutesBtn" class="mini-btn" type="button">Clear all</button>
+                        </div>
+                    </div>
+                    <div class="button-row">
+                        <button id="simulateBtn" class="primary-btn">Simulate route</button>
+                        <button id="animateBtn" class="ghost-btn" disabled>Animate path</button>
+                        
+                    </div>
+                    <div class="button-row">
+                        <button id="resetBtn" class="ghost-btn">Reset</button>
+                    </div>
+
+                    <button id="autoNodeDetailsBtn" class="control-toggle" type="button" aria-pressed="false">
+                        <span class="control-toggle__indicator" aria-hidden="true"></span>
+                        <small class="control-toggle__state">( Off )</small>
+                        <span class="control-toggle__label">
+                            Auto node details 
+                        </span>
+                    </button>
+                    <span id="routeSummary" class="summary">Summary :</span>
+                    
+                </section>
+                <div id="multiRouteList" class="multi-route-list" aria-live="polite" style="display: none;"></div>
+
+                <section class="sidebar__section" aria-labelledby="flow-timeline">
+                    <div class="section-header" style="display: flex; flex-direction: row; gap:10px;">
+                        <h2 id="flow-timeline">Flow timeline</h2>
+                        <button id="openLogModalBtn" class="mini-btn" type="button" disabled aria-disabled="true">View detailed log</button>
+                    </div>
+                    <div id="flowLog" class="flow-log" aria-live="polite"></div>
+                </section>
+            </div>
+        </aside>
+
+        <div class="sidebar-overlay" id="sidebarOverlay" aria-hidden="true"></div>
+        <section class="content-region">
+            <header class="status-bar" role="status">
+                <div class="status-bar__surface">
+                    <div class="sidebar-toggle__wrap">
+                        <div class="sidebar-toggle__meta" aria-hidden="true">
+                            <span class="sidebar-toggle__label-text">Sidebar</span>
+                            
+                        </div>
+                        <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-expanded="false" aria-controls="layoutSidebar">
+                            <span class="sidebar-toggle__icon" aria-hidden="true">
+                                <svg viewBox="0 0 20 20" focusable="false">
+                                    <path d="M4 6h12M4 10h12M4 14h12" />
+                                </svg>
+                            </span>
+                            <span class="sr-only">Toggle controls</span>
+                        </button>
+                        
+                    </div>
+
+                    <div class="status-grid">
+                        <section class="status-card status-card--compact status-card--hop" aria-live="polite">
+                            <div class="hop-row">
+                                <div class="hop-row__item--primary">
+                                    <p class="status-label">Hop</p>
+                                    <h6 id="statusHopValue" class="hop-row__value">0 / 0</h6>
+                                </div>
+                                <div class="hop-row__item">
+                                    <p class="status-label">SIGNALS</p>
+                                    <span id="statusSignalValue" class="status-sub"></span>
+                                    
+                                </div>
+                                <div class="hop-row__item">
+                                    <p class="status-label">Transfer</p>
+                                    <p id="statusTransferValue" class="hop-row__text">Transfer: —</p>
+                                </div>
+                            </div>
+
+                            <div class="phase-stack">
+                                <div class="phase-header">
+                                    
+                                </div>
+                                <ol class="phase-tracker" id="phaseTimeline" aria-label="Handshake phases">
+                                    <li class="phase-tracker__step" data-phase="ready">
+                                        <span class="phase-tracker__icon phase-tracker__icon--ready" aria-hidden="true">
+                                            <svg viewBox="0 0 20 20" focusable="false"><circle cx="10" cy="10" r="6" /></svg>
+                                        </span>
+                                        <span class="phase-tracker__label">Ready</span>
+                                    </li>
+                                    <li class="phase-tracker__step" data-phase="req">
+                                        <span class="phase-tracker__icon phase-tracker__icon--req" aria-hidden="true">
+                                            <svg viewBox="0 0 20 20" focusable="false"><path d="M5 10h10M11 6l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                        </span>
+                                        <span class="phase-tracker__label">REQ</span>
+                                    </li>
+                                    <li class="phase-tracker__step" data-phase="ack">
+                                        <span class="phase-tracker__icon phase-tracker__icon--ack" aria-hidden="true">
+                                            <svg viewBox="0 0 20 20" focusable="false"><path d="M15 10H5M9 6l-4 4 4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                        </span>
+                                        <span class="phase-tracker__label">ACK</span>
+                                    </li>
+                                    <li class="phase-tracker__step" data-phase="data">
+                                        <span class="phase-tracker__icon phase-tracker__icon--data" aria-hidden="true">
+                                            <svg viewBox="0 0 20 20" focusable="false"><rect x="5" y="7" width="10" height="6" rx="2" /></svg>
+                                        </span>
+                                        <span class="phase-tracker__label">DATA</span>
+                                    </li>
+                                    <li class="phase-tracker__step" data-phase="release">
+                                        <span class="phase-tracker__icon phase-tracker__icon--release" aria-hidden="true">
+                                            <svg viewBox="0 0 20 20" focusable="false"><path d="M7 5h6v6a4 4 0 01-4 4H5" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 3l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                        </span>
+                                        <span class="phase-tracker__label">Release</span>
+                                    </li>
+                                </ol>
+                            </div>
+                        </section>
+                        
+
+                        <section class="status-card status-card--timeline status-card--phase" aria-live="polite">
+                            <p class="status-label">Route :  <span id="statusRouteValue" class="status-value">Awaiting route computation</span></p>
+                           
+                            
+                            <div class="progress-wrapper">
+                            
+                                <p class="status-label" >Current : <span id="statusHopNodes" class="hop-row__text"></span></p>
+                                <div class="status-progress-header">
+
+                                    <p class="status-label">Progress : <span id="statusPhaseValue" class="status-value">Idle</span></p>
+                                    <span id="statusProgressPercent" class="status-value">0%</span>
+                                </div>
+                                <div class="status-progress-bar" aria-hidden="true">
+                                    <span id="statusProgressFill"></span>
+                                </div>
+                                <p id="statusTimerValue" class="status-sub">Timer: 0s</p>
+                            </div>
+                        </section>
+
+                        
+                    </div>
+                </div>
+            </header>
+
+            <main class="workspace">
+                <div class="canvas-container">
+                    <canvas id="networkCanvas" width="1200" height="900" aria-label="RicoBit topology canvas"></canvas>
+                    <div class="hud" id="hud">
+                        <span id="hudStatus">Idle</span>
+                    </div>
+                    <div class="canvas-controls" role="group" aria-label="Canvas and animation controls">
+                        <button id="cursorModeBtn" class="canvas-control-btn" type="button" aria-pressed="false" aria-label="Toggle scroll zoom" title="Toggle scroll zoom">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <polygon points="4,3 19.1,11.6 13.5,12.8 16.7,20.8 14.2,21.9 11,13.7 7.4,17.3" fill="currentColor"></polygon>
+                            </svg>
+                        </button>
+                        <button id="zoomInBtn" class="canvas-control-btn" type="button" aria-label="Zoom in" title="Zoom in">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M10.5 3a7.5 7.5 0 0 1 5.76 12.26l3.98 3.98a1.2 1.2 0 0 1-1.7 1.7l-3.98-3.98A7.5 7.5 0 1 1 10.5 3Zm0 3a.9.9 0 0 0-.9.9V9h-2.1a.9.9 0 1 0 0 1.8h2.1v2.1a.9.9 0 0 0 1.8 0V10.8h2.1a.9.9 0 1 0 0-1.8H11.4V6.9a.9.9 0 0 0-.9-.9Z" fill="currentColor"></path>
+                            </svg>
+                        </button>
+                        <button id="zoomOutBtn" class="canvas-control-btn" type="button" aria-label="Zoom out" title="Zoom out">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M10.5 3a7.5 7.5 0 0 1 5.76 12.26l3.98 3.98a1.2 1.2 0 0 1-1.7 1.7l-3.98-3.98A7.5 7.5 0 1 1 10.5 3Zm-3.9 6.9a.9.9 0 0 0 0 1.8h7.8a.9.9 0 1 0 0-1.8z" fill="currentColor"></path>
+                            </svg>
+                        </button>
+                        <button id="resetViewBtn" class="canvas-control-btn" type="button" aria-label="Reset view" title="Reset view">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M12 3a9 9 0 1 1-6.36 2.64 1 1 0 0 1 1.41 1.41A7 7 0 1 0 12 5a7 7 0 0 0-4.95 2.05l1.04 1.04A1 1 0 0 1 6.64 9.5L3.4 6.26a1 1 0 0 1 0-1.41L6.64 1.6a1 1 0 0 1 1.41 1.41L7.01 4.04A9 9 0 0 1 12 3Zm0 4a5 5 0 1 1-3.54 1.46A1 1 0 0 1 9.9 9.9 3 3 0 1 0 12 10a1 1 0 0 1 1-1h1a1 1 0 1 1 0 2h-.3A5 5 0 0 1 12 7Z" fill="currentColor"></path>
+                            </svg>
+                        </button>
+
+                        <span class="canvas-controls__divider" aria-hidden="true"></span>
+
+                        <button id="canvasSimulateBtn" class="canvas-control-btn" type="button" aria-label="Simulate route" title="Simulate route">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <circle cx="6.5" cy="6" r="2.3" fill="currentColor"></circle>
+                                <circle cx="17.5" cy="6" r="2.3" fill="currentColor"></circle>
+                                <circle cx="12" cy="17.5" r="2.3" fill="currentColor"></circle>
+                                <path d="M8.2 7.6 11 11.4M15.8 7.6 13 11.4M8.6 15.6 11 12.4M15.4 15.6 13 12.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path>
+                            </svg>
+                        </button>
+                        <button id="playPauseAnimationBtn" class="canvas-control-btn canvas-control-btn--primary" type="button" aria-label="Start animation" title="Start animation" data-state="play" disabled>
+                            <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <path d="M9 6l10 6-10 6V6z"></path>
+                            </svg>
+                            <svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <rect x="6" y="5" width="3" height="14" rx="1"></rect>
+                                <rect x="15" y="5" width="3" height="14" rx="1"></rect>
+                            </svg>
+                        </button>
+                        <button id="restartAnimationBtn" class="canvas-control-btn" type="button" aria-label="Reset simulation" title="Reset simulation">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M12 3a9 9 0 1 1-6.92 15.08 1 1 0 1 1 1.44-1.38A7 7 0 1 0 12 5a7.1 7.1 0 0 0-4.13 1.3l1.32 1.32a.9.9 0 1 1-1.27 1.27L4.16 5.13a.9.9 0 0 1 0-1.27L8.35.67a.9.9 0 1 1 1.27 1.27L8.3 3.26A9 9 0 0 1 12 3Z" fill="currentColor"></path>
+                                <path d="M17.6 12.6a1 1 0 0 1 1 1v3.8a1 1 0 0 1-1 1h-3.8a1 1 0 0 1 0-2h2.2l-2.76-2.76a1 1 0 0 1 1.42-1.42l2.74 2.74v-1.36a1 1 0 0 1 1-1Z" fill="currentColor"></path>
+                            </svg>
+                        </button>
+
+                        <div class="speed-menu">
+                            <button id="speedMenuBtn" class="canvas-control-btn canvas-control-btn--wide" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Speed 1.0×" title="Adjust speed" data-speed-label="1.0×">
+                                    <path d="M12 3.5a8.5 8.5 0 0 0-8.5 8.5 1 1 0 0 0 1 1h2.8a1 1 0 0 0 .95-.68 4.7 4.7 0 0 1 8.5 0 1 1 0 0 0 .95.68H20a1 1 0 0 0 1-1A8.5 8.5 0 0 0 12 3.5Zm0 4a1 1 0 0 0-.88.5l-2.6 4.54a1 1 0 0 0 1.76.92l2.6-4.54A1 1 0 0 0 12 7.5Z" fill="currentColor"></path>
+                                </svg>
+                                <span>1.0×</span>
+                            </button>
+                            <div id="speedMenuPopover" class="speed-menu__popover" role="dialog" aria-label="Adjust animation speed" hidden>
+                                <label class="speed-menu__label" for="speedControl">Speed</label>
+                                <input id="speedControl" type="range" min="0.2" max="1.5" step="0.1" value="0.6">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </section>
+
+        <aside id="nodeDetailsPanel" class="node-panel" aria-hidden="true">
+        <header class="node-panel__header">
+            <div class="node-panel__heading">
+                <p class="node-panel__eyebrow">Node details</p>
+                <h2 id="nodePanelTitle">—</h2>
+                <p id="nodePanelSubhead" class="node-panel__subhead">Select a node to inspect</p>
+            </div>
+            <button id="nodePanelClose" class="node-panel__close" type="button" aria-label="Close node details">×</button>
+        </header>
+
+        <section class="node-panel__section" aria-labelledby="node-panel-summary-label">
+            <h3 id="node-panel-summary-label">Summary</h3>
+            <dl class="node-panel__stats">
+                <div>
+                    <dt>Ring</dt>
+                    <dd id="nodePanelRing">—</dd>
+                </div>
+                <div>
+                    <dt>Degree</dt>
+                    <dd id="nodePanelDegree">—</dd>
+                </div>
+                <div>
+                    <dt>Routing entries</dt>
+                    <dd id="nodePanelRoutes">—</dd>
+                </div>
+            </dl>
+        </section>
+
+        <section class="node-panel__section" aria-labelledby="node-panel-buffers-label">
+            <h3 id="node-panel-buffers-label">Buffers</h3>
+            <ul class="node-panel__buffer-list">
+                <li>
+                    <span>Send</span>
+                    <span id="nodePanelSendBuffer" class="buffer-chip" data-state="idle">Idle</span>
+                </li>
+                <li>
+                    <span>Receive</span>
+                    <span id="nodePanelReceiveBuffer" class="buffer-chip" data-state="idle">Idle</span>
+                </li>
+                <li>
+                    <span>Application</span>
+                    <span id="nodePanelAppBuffer" class="buffer-chip" data-state="idle">0 packets</span>
+                </li>
+                <li>
+                    <span>Handshake</span>
+                    <span id="nodePanelHandshake" class="buffer-chip" data-state="idle">Idle</span>
+                </li>
+            </ul>
+        </section>
+
+        <section class="node-panel__section" aria-labelledby="node-panel-neighbors-label">
+            <h3 id="node-panel-neighbors-label">Links</h3>
+            <ul id="nodePanelNeighbors" class="node-panel__neighbors"></ul>
+        </section>
+
+        <section class="node-panel__section" aria-labelledby="node-panel-logic-label">
+            <h3 id="node-panel-logic-label">Logic modules</h3>
+            <dl id="nodePanelLogic" class="node-panel__logic"></dl>
+        </section>
+
+        <section class="node-panel__section node-panel__section--interfaces" aria-labelledby="node-panel-interfaces-label">
+            <h3 id="node-panel-interfaces-label">Interface detail</h3>
+            <div id="nodePanelInterfaces" class="interface-list"></div>
+        </section>
+        </aside>
+    </div>
+
+    <div id="nodePanelScrim" class="node-panel__scrim" aria-hidden="true"></div>
+
+    <div id="logModal" class="modal" aria-hidden="true">
+        <div class="modal__overlay" data-close-modal="true"></div>
+        <div class="modal__content" role="dialog" aria-modal="true" aria-labelledby="logModalTitle">
+            <header class="modal__header">
+                <div class="modal__heading">
+                    <h2 id="logModalTitle">Detailed log</h2>
+                </div>
+                <div class="modal__actions">
+                    <button id="exportLogPdfBtn" class="modal__action-btn" type="button" disabled aria-disabled="true">Export PDF</button>
+                    <button id="logModalClose" class="modal__close" type="button" aria-label="Close detailed log">&times;</button>
+                </div>
+            </header>
+            <div id="logModalBody" class="modal__body"></div>
+            <footer class="modal__footer">
+                <small class="modal__footer-note">© RicoBit Simulator. All rights reserved.</small>
+            </footer>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
+</body>
+</html>

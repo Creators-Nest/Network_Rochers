@@ -60,8 +60,19 @@ class RicoBitVisualizer:
         
         # Node selection state for click-to-select
         self.selection_mode = False
-        self.selected_source = None
-        self.selected_dest = None
+
+        # Cache available nodes/rings (RiCoBiT excludes the central node (0, 0))
+        self.available_nodes = sorted(self.topology.nodes.keys())
+        self.available_rings = sorted({addr[0] for addr in self.available_nodes})
+        self.min_ring = self.available_rings[0] if self.available_rings else 0
+        self.max_ring = self.available_rings[-1] if self.available_rings else 0
+        self.ring_count = len(self.available_rings)
+
+        default_source = self.available_nodes[0] if self.available_nodes else None
+        default_dest = self.available_nodes[1] if len(self.available_nodes) > 1 else default_source
+
+        self.selected_source = default_source
+        self.selected_dest = default_dest
         self.click_count = 0
         
         # Hover state for node details modal
@@ -119,6 +130,11 @@ class RicoBitVisualizer:
         
         # Bind events
         self._bind_events()
+
+    def _format_address(self, addr):
+        if not addr:
+            return "—"
+        return f"({addr[0]}, {addr[1]})"
     
     def _create_status_bar(self):
         """Create enhanced status bar with real-time packet flow information"""
@@ -394,7 +410,7 @@ class RicoBitVisualizer:
                 bg=self.colors['panel_bg'], fg=self.colors['text']
                ).pack(anchor=tk.W, pady=(0, 2))
         
-        self.rings_var = tk.IntVar(value=self.num_levels)
+        self.rings_var = tk.IntVar(value=max(2, self.ring_count))
         self.rings_slider = tk.Scale(frame, from_=2, to=15, orient=tk.HORIZONTAL,
                                      variable=self.rings_var,
                                      bg=self.colors['panel_bg'], fg=self.colors['text'],
@@ -434,24 +450,28 @@ class RicoBitVisualizer:
                ).pack(side=tk.LEFT)
         
         # Display selected source
-        self.src_display_label = tk.Label(src_inner, text="(0, 0)", 
-                                          font=("Courier", 9, "bold"),
-                                          bg='white', fg='#2e7d32')
+        src_default = self.selected_source or (self.min_ring, 0)
+        self.src_display_label = tk.Label(src_inner, text=self._format_address(src_default), 
+                          font=("Courier", 9, "bold"),
+                          bg='white', fg='#2e7d32')
         self.src_display_label.pack(side=tk.LEFT, padx=10)
         
         # Manual input
         manual_src_frame = tk.Frame(src_inner, bg='white')
         manual_src_frame.pack(side=tk.RIGHT)
         
-        self.src_ring_var = tk.IntVar(value=0)
-        self.src_node_var = tk.IntVar(value=0)
+        src_ring_default = src_default[0] if src_default else self.min_ring
+        src_node_default = src_default[1] if src_default else 0
+        self.src_ring_var = tk.IntVar(value=src_ring_default)
+        self.src_node_var = tk.IntVar(value=src_node_default)
         
         tk.Label(manual_src_frame, text="Ring:", font=("Arial", 8),
-                bg='white', fg='#666666').pack(side=tk.LEFT, padx=2)
-        tk.Spinbox(manual_src_frame, from_=0, to=14, width=3, 
-                  textvariable=self.src_ring_var,
-                  bg='white', fg=self.colors['text'], font=("Arial", 9),
-                  command=self._update_source_from_spinbox).pack(side=tk.LEFT, padx=1)
+            bg='white', fg='#666666').pack(side=tk.LEFT, padx=2)
+        self.src_ring_spin = tk.Spinbox(manual_src_frame, from_=self.min_ring, to=self.max_ring or 14, width=3, 
+              textvariable=self.src_ring_var,
+              bg='white', fg=self.colors['text'], font=("Arial", 9),
+              command=self._update_source_from_spinbox)
+        self.src_ring_spin.pack(side=tk.LEFT, padx=1)
         
         tk.Label(manual_src_frame, text="Node:", font=("Arial", 8),
                 bg='white', fg='#666666').pack(side=tk.LEFT, padx=(5, 2))
@@ -472,24 +492,28 @@ class RicoBitVisualizer:
                ).pack(side=tk.LEFT)
         
         # Display selected destination
-        self.dst_display_label = tk.Label(dst_inner, text="(5, 7)", 
-                                          font=("Courier", 9, "bold"),
-                                          bg='white', fg='#c62828')
+        dst_default = self.selected_dest or src_default
+        self.dst_display_label = tk.Label(dst_inner, text=self._format_address(dst_default), 
+                          font=("Courier", 9, "bold"),
+                          bg='white', fg='#c62828')
         self.dst_display_label.pack(side=tk.LEFT, padx=10)
         
         # Manual input
         manual_dst_frame = tk.Frame(dst_inner, bg='white')
         manual_dst_frame.pack(side=tk.RIGHT)
         
-        self.dst_ring_var = tk.IntVar(value=3)
-        self.dst_node_var = tk.IntVar(value=7)
+        dst_ring_default = dst_default[0] if dst_default else src_ring_default
+        dst_node_default = dst_default[1] if dst_default else src_node_default
+        self.dst_ring_var = tk.IntVar(value=dst_ring_default)
+        self.dst_node_var = tk.IntVar(value=dst_node_default)
         
         tk.Label(manual_dst_frame, text="Ring:", font=("Arial", 8),
-                bg='white', fg='#666666').pack(side=tk.LEFT, padx=2)
-        tk.Spinbox(manual_dst_frame, from_=0, to=14, width=3, 
-                  textvariable=self.dst_ring_var,
-                  bg='white', fg=self.colors['text'], font=("Arial", 9),
-                  command=self._update_dest_from_spinbox).pack(side=tk.LEFT, padx=1)
+            bg='white', fg='#666666').pack(side=tk.LEFT, padx=2)
+        self.dst_ring_spin = tk.Spinbox(manual_dst_frame, from_=self.min_ring, to=self.max_ring or 14, width=3, 
+              textvariable=self.dst_ring_var,
+              bg='white', fg=self.colors['text'], font=("Arial", 9),
+              command=self._update_dest_from_spinbox)
+        self.dst_ring_spin.pack(side=tk.LEFT, padx=1)
         
         tk.Label(manual_dst_frame, text="Node:", font=("Arial", 8),
                 bg='white', fg='#666666').pack(side=tk.LEFT, padx=(5, 2))
@@ -503,14 +527,14 @@ class RicoBitVisualizer:
         ring = self.src_ring_var.get()
         node = self.src_node_var.get()
         self.selected_source = (ring, node)
-        self.src_display_label.config(text=f"({ring}, {node})")
+        self.src_display_label.config(text=self._format_address(self.selected_source))
     
     def _update_dest_from_spinbox(self):
         """Update destination display when spinbox changes"""
         ring = self.dst_ring_var.get()
         node = self.dst_node_var.get()
         self.selected_dest = (ring, node)
-        self.dst_display_label.config(text=f"({ring}, {node})")
+        self.dst_display_label.config(text=self._format_address(self.selected_dest))
     
     def _create_flow_analysis_panel(self, parent):
         """Create enhanced packet flow analysis panel WITHOUT timeline visualization"""
@@ -863,8 +887,8 @@ class RicoBitVisualizer:
         max_radius = min(canvas_width, canvas_height) * 0.48  # Increased to 0.48 for much better spacing
         ring_spacing = max_radius / max(1, self.num_levels - 1) if self.num_levels > 1 else max_radius
         
-        # Place center node at origin (Ring 0)
-        if self.num_levels >= 1:
+        # Place center node if topology still defines it (legacy support)
+        if (0, 0) in self.topology.nodes:
             self.node_positions[(0, 0)] = (center_x, center_y)
         
         # Place remaining rings in perfect concentric circles
@@ -1811,6 +1835,7 @@ Interfaces:     {len(node.interfaces)} connections
         
         # Get arc points if this is a ring hop
         arc_points = self._get_arc_points_for_hop(addr, next_addr)
+        arrow_key = ('link', addr, next_addr)
         
         # After short delay, show routing phase
         def show_routing():
@@ -1848,7 +1873,12 @@ Interfaces:     {len(node.interfaces)} connections
             self._update_status_bar(current_node=addr, next_node=next_addr, interface_state=req_state)
             
             # Show REQ arrow with arc path (source to dest)
-            self.packet_animator.draw_transfer_arrow(cx, cy, ncx, ncy, phase='req', arc_points=arc_points)
+            self.packet_animator.draw_transfer_arrow(
+                cx, cy, ncx, ncy,
+                phase='req',
+                arc_points=arc_points,
+                identifier=arrow_key
+            )
         
         self.root.after(int(self.animation_speed * 0.4), show_req)
         
@@ -1870,7 +1900,12 @@ Interfaces:     {len(node.interfaces)} connections
             self._update_status_bar(current_node=addr, next_node=next_addr, interface_state=ack_state)
             
             # Show ACK arrow with arc path (dest to source - will be reversed in draw_transfer_arrow)
-            self.packet_animator.draw_transfer_arrow(cx, cy, ncx, ncy, phase='ack', arc_points=arc_points)
+            self.packet_animator.draw_transfer_arrow(
+                cx, cy, ncx, ncy,
+                phase='ack',
+                arc_points=arc_points,
+                identifier=arrow_key
+            )
         
         self.root.after(int(self.animation_speed * 0.6), show_ack)
     
@@ -1892,6 +1927,7 @@ Interfaces:     {len(node.interfaces)} connections
         
         # Get arc points if this is a ring hop
         arc_points = self._get_arc_points_for_hop(addr, next_addr)
+        arrow_key = ('link', addr, next_addr)
         
         # Clock tracking for this hop
         base_clk = index * 5  # Each hop takes approximately 5 clock cycles
@@ -1912,7 +1948,12 @@ Interfaces:     {len(node.interfaces)} connections
         self._update_status_bar(current_node=addr, next_node=next_addr, interface_state=handshake_state_1)
         
         # Show REQ arrow with arc path (source to dest)
-        self.packet_animator.draw_transfer_arrow(cx, cy, ncx, ncy, phase='req', arc_points=arc_points)
+        self.packet_animator.draw_transfer_arrow(
+            cx, cy, ncx, ncy,
+            phase='req',
+            arc_points=arc_points,
+            identifier=arrow_key
+        )
         self.packet_animator.draw_node_activity_ring(cx, cy, activity='busy')
         
         # Phase 2: ACK (Acknowledgment) - Opposite direction animated arrow
@@ -1932,7 +1973,12 @@ Interfaces:     {len(node.interfaces)} connections
             self._update_status_bar(current_node=addr, next_node=next_addr, interface_state=handshake_state_2)
             
             # Show ACK arrow with arc path (dest to source - will be reversed)
-            self.packet_animator.draw_transfer_arrow(cx, cy, ncx, ncy, phase='ack', arc_points=arc_points)
+            self.packet_animator.draw_transfer_arrow(
+                cx, cy, ncx, ncy,
+                phase='ack',
+                arc_points=arc_points,
+                identifier=arrow_key
+            )
             self.packet_animator.draw_node_activity_ring(ncx, ncy, activity='ready')
         
         self.root.after(int(self.animation_speed * 0.2), show_ack)
@@ -1953,7 +1999,12 @@ Interfaces:     {len(node.interfaces)} connections
             }
             self._update_status_bar(current_node=addr, next_node=next_addr, interface_state=transfer_state)
             
-            self.packet_animator.draw_transfer_arrow(cx, cy, ncx, ncy, phase='data', arc_points=arc_points)
+            self.packet_animator.draw_transfer_arrow(
+                cx, cy, ncx, ncy,
+                phase='data',
+                arc_points=arc_points,
+                identifier=arrow_key
+            )
             self.packet_animator.draw_packet_at_node(cx, cy, phase='sending')
         
         self.root.after(int(self.animation_speed * 0.4), show_data_transfer)
@@ -2218,11 +2269,49 @@ Interfaces:     {len(node.interfaces)} connections
         from simulation.simulator import Simulator
         
         new_rings = self.rings_var.get()
+        num_levels = max(2, new_rings + 1)
         
-        print(f"\nRecreating topology with {new_rings} rings...")
-        self.topology = RiCoBiT_Topology(num_levels=new_rings)
+        print(f"\nRecreating topology with {new_rings} rings ({num_levels} levels)...")
+        self.topology = RiCoBiT_Topology(num_levels=num_levels)
         self.simulator = Simulator(self.topology)
-        self.num_levels = new_rings
+        self.num_levels = num_levels
+
+        # Refresh cached node metadata after rebuild
+        self.available_nodes = sorted(self.topology.nodes.keys())
+        self.available_rings = sorted({addr[0] for addr in self.available_nodes})
+        self.min_ring = self.available_rings[0] if self.available_rings else 0
+        self.max_ring = self.available_rings[-1] if self.available_rings else 0
+        self.ring_count = len(self.available_rings)
+
+        if hasattr(self, "src_ring_spin"):
+            self.src_ring_spin.config(from_=self.min_ring, to=self.max_ring or 14)
+        if hasattr(self, "dst_ring_spin"):
+            self.dst_ring_spin.config(from_=self.min_ring, to=self.max_ring or 14)
+        if hasattr(self, 'rings_var'):
+            self.rings_var.set(max(2, self.ring_count))
+
+        self.selected_source = self.available_nodes[0] if self.available_nodes else None
+        self.selected_dest = (
+            self.available_nodes[1] if len(self.available_nodes) > 1 else self.selected_source
+        )
+
+        if hasattr(self, 'src_ring_var'):
+            if self.selected_source:
+                self.src_ring_var.set(self.selected_source[0])
+                self.src_node_var.set(self.selected_source[1])
+            else:
+                self.src_ring_var.set(self.min_ring)
+                self.src_node_var.set(0)
+            self.src_display_label.config(text=self._format_address(self.selected_source))
+
+        if hasattr(self, 'dst_ring_var'):
+            if self.selected_dest:
+                self.dst_ring_var.set(self.selected_dest[0])
+                self.dst_node_var.set(self.selected_dest[1])
+            else:
+                self.dst_ring_var.set(self.min_ring)
+                self.dst_node_var.set(0)
+            self.dst_display_label.config(text=self._format_address(self.selected_dest))
         
         self.clear_highlights()
         self.arc_renderer.clear_arcs()

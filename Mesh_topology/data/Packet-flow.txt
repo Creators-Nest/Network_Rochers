@@ -1,0 +1,26 @@
+
+### 🌊 How Packet Flow Works
+
+The packet flow describes the complete journey of a packet from its creation at the source node to its consumption at the destination node.
+
+The `packet` itself is a data structure (`struct`) that contains:
+* [cite_start]`source_address` [cite: 325]
+* [cite_start]`dest_address` [cite: 326]
+* [cite_start]`data` [cite: 327]
+* [cite_start]`start_timer` (records the clock value at creation) [cite: 328, 330]
+* [cite_start]`end_timer` (records the clock value at reception) [cite: 329, 331]
+
+Here is the step-by-step lifecycle of a packet, based on the diagrams and text:
+
+1.  **Packet Creation:** A node's `Application Logic` generates a packet. [cite_start]The `start_timer` is immediately set to the current simulation clock value[cite: 330].
+2.  **Initial Routing & Queuing:** The packet is given to the node's `Routing Logic` to determine the first hop (i.e., which adjacent node to send it to). [cite_start]The packet is then placed in the `Send Buffer` of the corresponding interface (e.g., the 'East' interface's `Send Buffer`)[cite: 197].
+3.  **Node-to-Node Transfer (Handshake):** The interface's `Control Logic` initiates the handshake process (as described in the previous answer) to move the packet to the next node.
+    * It sends a `REQ` (Request) signal.
+    * It waits for an `ACK` (Acknowledgement) signal.
+    * [cite_start]Upon receiving the `ACK`, it moves the packet to the `Send Register` and transmits it serially (bit-by-bit) over the `DATA` pin[cite: 205].
+4.  [cite_start]**Reception at Intermediate Node:** The adjacent node receives the serial data into its `Receive Register`[cite: 206]. [cite_start]Once the full packet is received, it is moved into the `Receive Buffer`[cite: 213]. [cite_start]The sending and receiving interfaces then reset their status bits (like `Busy`)[cite: 210].
+5.  [cite_start]**Routing Decision (at Intermediate Node):** The `Control Logic` at the receiving node checks the packet's `dest_address`[cite: 211].
+    * [cite_start]**Case A: Destination Reached.** If the packet's destination matches the current node's address, the packet is removed from the buffer and given to the `Application Logic` for processing[cite: 211]. [cite_start]The `end_timer` is set to the current clock value, and the packet is "taken out of the system"[cite: 214, 331]. [cite_start]The total latency can now be calculated (`end_timer` - `start_timer`)[cite: 332].
+    * [cite_start]**Case B: Not Destination (Forwarding).** If the packet is not at its destination, the `Routing Logic` is called again to determine the *next* hop[cite: 211].
+6.  [cite_start]**Re-Queuing for Forwarding:** The packet is then moved from the `Receive Buffer` to the `Send Buffer` of the *next* interface (e.g., it arrived at the 'West' interface and is now being moved to the 'North' interface's `Send Buffer`) [cite: 212-213].
+7.  **Repeat:** The process repeats from Step 3. The packet "hops" from node to node, being routed and re-queued at each step, until it finally reaches its destination.
