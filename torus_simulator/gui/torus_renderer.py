@@ -83,11 +83,60 @@ class TorusRenderer:
                             fill=self.colors['connection'], width=1, dash=(2, 2)
                         )
                         self.grid_items.append(line_item)
+                
+                # Draw torus wraparound connections - offset above and below existing connections
+                offset = 15  # Offset distance for wraparound lines
+                
+                # Horizontal wraparound (left-right edges) - above and below
+                for y in range(height):
+                    left_pos = node_positions.get((0, y))
+                    right_pos = node_positions.get((width-1, y))
+                    if left_pos and right_pos:
+                        cx1, cy1 = transform_coords(left_pos[0], left_pos[1])
+                        cx2, cy2 = transform_coords(right_pos[0], right_pos[1])
+                        
+                        # Upper wraparound line
+                        line_item = self.canvas.create_line(
+                            cx1, cy1 - offset, cx2, cy2 - offset,
+                            fill='#FF6B6B', width=2, dash=(8, 4)
+                        )
+                        self.grid_items.append(line_item)
+                        
+                        # Lower wraparound line
+                        line_item = self.canvas.create_line(
+                            cx1, cy1 + offset, cx2, cy2 + offset,
+                            fill='#FF6B6B', width=2, dash=(8, 4)
+                        )
+                        self.grid_items.append(line_item)
+                
+                # Vertical wraparound (top-bottom edges) - left and right
+                for x in range(width):
+                    top_pos = node_positions.get((x, 0))
+                    bottom_pos = node_positions.get((x, height-1))
+                    if top_pos and bottom_pos:
+                        cx1, cy1 = transform_coords(top_pos[0], top_pos[1])
+                        cx2, cy2 = transform_coords(bottom_pos[0], bottom_pos[1])
+                        
+                        # Left wraparound line
+                        line_item = self.canvas.create_line(
+                            cx1 - offset, cy1, cx2 - offset, cy2,
+                            fill='#FF6B6B', width=2, dash=(8, 4)
+                        )
+                        self.grid_items.append(line_item)
+                        
+                        # Right wraparound line
+                        line_item = self.canvas.create_line(
+                            cx1 + offset, cy1, cx2 + offset, cy2,
+                            fill='#FF6B6B', width=2, dash=(8, 4)
+                        )
+                        self.grid_items.append(line_item)
     
     def draw_routing_path(self, path, node_positions, transform_coords, zoom_level):
         """Draw highlighted routing path for torus."""
         if not path or len(path) < 2:
             return
+        
+        offset = 15  # Same offset as wraparound lines
         
         # Draw path segments
         for i in range(len(path) - 1):
@@ -100,6 +149,22 @@ class TorusRenderer:
                 
                 cx1, cy1 = transform_coords(x1, y1)
                 cx2, cy2 = transform_coords(x2, y2)
+                
+                # Check if this is a wraparound connection
+                sx, sy = start_addr
+                ex, ey = end_addr
+                is_horizontal_wrap = (abs(sx - ex) > 1) and (sy == ey)
+                is_vertical_wrap = (abs(sy - ey) > 1) and (sx == ex)
+                
+                # Adjust coordinates for wraparound paths
+                if is_horizontal_wrap:
+                    # Use upper wraparound line for horizontal wrap
+                    cy1 -= offset
+                    cy2 -= offset
+                elif is_vertical_wrap:
+                    # Use left wraparound line for vertical wrap
+                    cx1 -= offset
+                    cx2 -= offset
                 
                 # Draw path segment
                 path_item = self.canvas.create_line(

@@ -63,6 +63,10 @@ class TorusVisualizer:
         self.selected_dest = None
         self.click_count = 0
         
+        # Buffer display state
+        self.buffer_display_node = None
+        self.buffer_display_items = []
+        
         # Hover state
         self.hover_node = None
         self.hover_timer = None
@@ -899,6 +903,15 @@ class TorusVisualizer:
                 'recv_buf': 0
             }
         
+        # Inject packet into source node's send buffer
+        source_node = self.topology.nodes[path[0]]
+        if len(path) > 1:
+            next_hop = path[1]
+            if next_hop in source_node.interfaces:
+                interface = source_node.interfaces[next_hop]
+                interface.send_buffer.enqueue(self.current_packet)
+                self.buffer_states[path[0]]['send_buf'] = len(interface.send_buffer.buffer)
+        
         # Create real packet
         from core.packet import Packet
         self.current_packet = Packet(
@@ -1012,6 +1025,7 @@ class TorusVisualizer:
             self.root.after(self.animation_speed, lambda: animate_step(index + 1))
         
         animate_step(0)
+        self._start_buffer_refresh()
     
     def _animate_source_node(self, addr, next_addr, cx, cy, path, interface_state):
         """Animate source node packet creation and initial send"""
@@ -1054,7 +1068,12 @@ class TorusVisualizer:
             self._update_flow_analysis("  • Packet placed in Send Buffer")
             
             # Update buffer state - packet in send buffer
-            self.buffer_states[addr]['send_buf'] = 1
+            if addr in self.buffer_states:
+                self.buffer_states[addr]['send_buf'] = 1
+            
+            # Refresh buffer display if showing this node
+            if self.buffer_display_node == addr:
+                self._show_buffer_display(addr)
             
             routing_state = {
                 'req': 0, 'ack': 0, 'busy': 0, 'transfer': 0,
@@ -1117,10 +1136,29 @@ class TorusVisualizer:
             self._update_flow_analysis("  • Packet data transmitted")
             self._update_flow_analysis(f"  • Moving to next hop: {next_addr}")
             
-            # Update buffer states - packet leaves send buffer, enters receive buffer
-            self.buffer_states[addr]['send_buf'] = 0
+            # Update actual interface buffers and buffer states
+            node = self.topology.nodes[addr]
+            if next_addr in node.interfaces:
+                interface = node.interfaces[next_addr]
+                if not interface.send_buffer.is_empty():
+                    packet = interface.send_buffer.dequeue()
+                    # Move to next node's receive buffer
+                    next_node = self.topology.nodes[next_addr]
+                    if addr in next_node.interfaces:
+                        next_interface = next_node.interfaces[addr]
+                        next_interface.receive_buffer.enqueue(packet)
+            
+            # Update buffer states
+            if addr in self.buffer_states:
+                self.buffer_states[addr]['send_buf'] = 0
             if next_addr in self.buffer_states:
                 self.buffer_states[next_addr]['recv_buf'] = 1
+            
+            # Refresh buffer displays
+            if self.buffer_display_node == addr:
+                self._show_buffer_display(addr)
+            elif self.buffer_display_node == next_addr:
+                self._show_buffer_display(next_addr)
             
             data_state = {
                 'req': 1, 'ack': 1, 'busy': 1, 'transfer': 1,
@@ -1207,10 +1245,26 @@ class TorusVisualizer:
             self._update_flow_analysis("  • Send Register → pin_DATA")
             self._update_flow_analysis(f"  • Direction: {addr} → {next_addr}")
             
-            # Update buffer - packet moves from receive to send buffer
+            # Update actual interface buffers - packet moves from receive to send buffer
+            node = self.topology.nodes[addr]
+            if next_addr in node.interfaces:
+                # Move packet from receive buffer to send buffer
+                send_interface = node.interfaces[next_addr]
+                # Find interface that has the packet in receive buffer
+                for neighbor_addr, interface in node.interfaces.items():
+                    if not interface.receive_buffer.is_empty():
+                        packet = interface.receive_buffer.dequeue()
+                        send_interface.send_buffer.enqueue(packet)
+                        break
+            
+            # Update buffer states
             if addr in self.buffer_states:
                 self.buffer_states[addr]['recv_buf'] = 0
                 self.buffer_states[addr]['send_buf'] = 1
+            
+            # Refresh buffer display
+            if self.buffer_display_node == addr:
+                self._show_buffer_display(addr)
             
             transfer_state = {
                 'req': 1, 'ack': 1, 'busy': 1, 'transfer': 1,
@@ -1240,6 +1294,12 @@ class TorusVisualizer:
                 self.buffer_states[addr]['send_buf'] = 0
             if next_addr in self.buffer_states:
                 self.buffer_states[next_addr]['recv_buf'] = 1
+            
+            # Refresh buffer displays
+            if self.buffer_display_node == addr:
+                self._show_buffer_display(addr)
+            elif self.buffer_display_node == next_addr:
+                self._show_buffer_display(next_addr)
             
             receive_state = {
                 'req': 1, 'ack': 1, 'busy': 1, 'transfer': 1,
@@ -1333,6 +1393,7 @@ class TorusVisualizer:
         self.clear_highlights()
         self.packet_animator.clear_animations()
         self.torus_renderer.clear_paths()
+        self._hide_buffer_display()
         
         # Reset state
         self.current_packet = None
@@ -1463,7 +1524,7 @@ class TorusVisualizer:
         self.root.bind("<Escape>", lambda e: self.clear_highlights())
     
     def on_canvas_click(self, event):
-        """Handle canvas click for node selection"""
+        """Handle canvas click for node selection and buffer display"""
         clicked_node = None
         for addr, item_id in self.node_items.items():
             coords = self.canvas.coords(item_id)
@@ -1478,9 +1539,13 @@ class TorusVisualizer:
                     break
         
         if clicked_node is None:
+            self._hide_buffer_display()
             return
         
         x, y = clicked_node
+        
+        # Show buffer display for clicked node
+        self._show_buffer_display(clicked_node)
         
         if self.click_count == 0:
             # First click - set source
@@ -1492,14 +1557,10 @@ class TorusVisualizer:
             
             # Visual feedback
             self._highlight_selected_node(clicked_node, 'source')
-            messagebox.showinfo("Source Selected", 
-                              f"Source node set to ({x}, {y})\n\nNow click another node to set destination.")
             
         elif self.click_count == 1:
             # Second click - set destination
             if clicked_node == self.selected_source:
-                messagebox.showwarning("Invalid Selection", 
-                                     "Destination cannot be the same as source.\nPlease click a different node.")
                 return
             
             self.selected_dest = clicked_node
@@ -1510,8 +1571,6 @@ class TorusVisualizer:
             
             # Visual feedback
             self._highlight_selected_node(clicked_node, 'dest')
-            messagebox.showinfo("Destination Selected", 
-                              f"Destination node set to ({x}, {y})\n\nReady to simulate!")
             
             # Clear selection highlights after a moment
             self.root.after(2000, self.clear_highlights)
@@ -1602,16 +1661,12 @@ class TorusVisualizer:
         content_frame = tk.Frame(overlay_frame, bg='white')
         content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Get real-time buffer states from animation tracking
-        if self.animation_running and addr in self.buffer_states:
-            send_buf = self.buffer_states[addr]['send_buf']
-            recv_buf = self.buffer_states[addr]['recv_buf']
-        else:
-            try:
-                send_buf = sum(len(iface.send_buffer.buffer) for iface in node.interfaces.values())
-                recv_buf = sum(len(iface.receive_buffer.buffer) for iface in node.interfaces.values())
-            except AttributeError:
-                send_buf = recv_buf = 0
+        # Get real-time buffer states from actual interfaces
+        try:
+            send_buf = sum(len(iface.send_buffer.buffer) for iface in node.interfaces.values())
+            recv_buf = sum(len(iface.receive_buffer.buffer) for iface in node.interfaces.values())
+        except AttributeError:
+            send_buf = recv_buf = 0
         
         # Basic info with real-time buffer states
         info_text = f"Coordinates: ({x}, {y})\n"
@@ -1688,6 +1743,98 @@ class TorusVisualizer:
     def on_mouse_release(self, event):
         """Handle mouse release for drag end"""
         self.is_dragging = False
+    
+    def _show_buffer_display(self, node_addr):
+        """Show buffer display for a node"""
+        self._hide_buffer_display()  # Clear previous display
+        
+        if node_addr not in self.node_positions:
+            return
+            
+        self.buffer_display_node = node_addr
+        x, y = self.node_positions[node_addr]
+        cx, cy = self._transform_coords(x, y)
+        
+        # Get node and its interfaces
+        node = self.topology.nodes.get(node_addr)
+        if not node:
+            return
+        
+        # Define buffer positions and labels
+        buffer_info = [
+            ('UP', cx, cy - 50, (node_addr[0], (node_addr[1] - 1) % self.height)),
+            ('DOWN', cx, cy + 50, (node_addr[0], (node_addr[1] + 1) % self.height)),
+            ('LEFT', cx - 50, cy, ((node_addr[0] - 1) % self.width, node_addr[1])),
+            ('RIGHT', cx + 50, cy, ((node_addr[0] + 1) % self.width, node_addr[1]))
+        ]
+        
+        for direction, bx, by, neighbor_addr in buffer_info:
+            # Get interface to this neighbor
+            interface = node.interfaces.get(neighbor_addr)
+            if interface:
+                try:
+                    send_count = len(interface.send_buffer.buffer)
+                    recv_count = len(interface.receive_buffer.buffer)
+                except AttributeError:
+                    send_count = recv_count = 0
+            else:
+                send_count = recv_count = 0
+            
+            # Use color coding for buffer status
+            if send_count > 0 or recv_count > 0:
+                box_color = '#ffffcc'  # Light yellow for active buffers
+                text_color = '#cc6600'  # Orange text for active
+            else:
+                box_color = 'white'
+                text_color = '#333333'
+            
+            # Draw buffer box
+            box_item = self.canvas.create_rectangle(
+                bx - 20, by - 15, bx + 20, by + 15,
+                fill=box_color, outline='#333333', width=2
+            )
+            self.buffer_display_items.append(box_item)
+            
+            # Draw direction label
+            dir_item = self.canvas.create_text(
+                bx, by - 25, text=f"{direction} BUFFER",
+                fill='#666666', font=('Arial', 8, 'bold')
+            )
+            self.buffer_display_items.append(dir_item)
+            
+            # Draw buffer counts
+            count_item = self.canvas.create_text(
+                bx, by, text=f"Send: {send_count}/4\nRecv: {recv_count}/4",
+                fill=text_color, font=('Arial', 9, 'bold'), justify=tk.CENTER
+            )
+            self.buffer_display_items.append(count_item)
+        
+        # Draw node label
+        label_item = self.canvas.create_text(
+            cx, cy + 80, text=f"Node {node_addr} Buffers",
+            fill='#000000', font=('Arial', 10, 'bold'), justify=tk.CENTER
+        )
+        self.buffer_display_items.append(label_item)
+    
+    def _hide_buffer_display(self):
+        """Hide buffer display"""
+        for item in self.buffer_display_items:
+            try:
+                self.canvas.delete(item)
+            except:
+                pass
+        self.buffer_display_items.clear()
+        self.buffer_display_node = None
+    
+    def _start_buffer_refresh(self):
+        """Start periodic buffer display refresh during animation"""
+        def refresh_buffers():
+            if self.animation_running and self.buffer_display_node:
+                self._show_buffer_display(self.buffer_display_node)
+                self.root.after(500, refresh_buffers)
+        
+        if self.animation_running:
+            refresh_buffers()
     
     def run(self):
         """Start the GUI"""

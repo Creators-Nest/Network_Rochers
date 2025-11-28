@@ -40,8 +40,8 @@ class Interface:
         # State: Idle - Try to start new transfer
         if not self.bit_Busy and not self.bit_Transfer:
             if not self.send_buffer.is_empty():
-                # Check if receiver is free
-                if not self.connected_interface.bit_Busy:
+                # Check if receiver is free and not choking
+                if not self.connected_interface.bit_Busy and not self.connected_interface.pin_CHOKE:
                     # Start handshake
                     self.pin_REQ = True
                     self.bit_Busy = True
@@ -49,6 +49,14 @@ class Interface:
         
         # State: Waiting for ACK
         elif self.bit_Busy and not self.bit_Transfer:
+            # Check for CHOKE signal (buffer full at receiver)
+            if self.connected_interface.pin_CHOKE:
+                # Receiver buffer full - abort transfer and retry later
+                self.pin_REQ = False
+                self.bit_Busy = False
+                self.timeout_counter = 0
+                return
+            
             # Check if we got ACK
             if self.connected_interface.pin_ACK:
                 # Load packet into send register and start transfer
@@ -85,15 +93,18 @@ class Interface:
         # State: Idle - Check for incoming REQ
         if not self.bit_Busy and not self.bit_Receive:
             if self.connected_interface.pin_REQ:
-                # Check if we have buffer space
+                # Check if we have buffer space (4 packet limit)
                 if not self.receive_buffer.is_full():
                     # Accept transfer
                     self.pin_ACK = True
                     self.bit_Busy = True
                     self.bit_Receive = True
+                    self.pin_CHOKE = False  # Clear any previous CHOKE
                 else:
-                    # Buffer full - send CHOKE signal
+                    # Buffer full - reject transfer with CHOKE signal
+                    self.pin_ACK = False
                     self.pin_CHOKE = True
+                    # Do not set bit_Busy or bit_Receive when rejecting
         
         # State: Receiving Data
         elif self.bit_Receive:
@@ -102,12 +113,18 @@ class Interface:
                 packet = self.connected_interface.pin_DATA
                 self.receive_register = packet
                 
-                # Move to receive buffer
-                self.receive_buffer.enqueue(packet)
-                self.receive_register = None
-                
-                # Reset state
-                self.pin_ACK = False
-                self.bit_Receive = False
-                self.bit_Busy = False
-                self.pin_CHOKE = False
+                # Move to receive buffer (should have space since we checked)
+                if self.receive_buffer.enqueue(packet):
+                    self.receive_register = None
+                    
+                    # Reset state - transfer complete
+                    self.pin_ACK = False
+                    self.bit_Receive = False
+                    self.bit_Busy = False
+                    self.pin_CHOKE = False
+                else:
+                    # Unexpected buffer full - should not happen
+                    self.pin_CHOKE = True
+                    self.pin_ACK = False
+                    self.bit_Receive = False
+                    self.bit_Busy = False
