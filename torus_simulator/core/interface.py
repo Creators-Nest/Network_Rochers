@@ -17,6 +17,7 @@ class Interface:
         self.pin_ACK = False
         self.pin_DATA = None
         self.pin_CHOKE = False
+        self.pin_CLK = False  # Clock signal for synchronization
 
         # --- Status Bits ---
         self.bit_Busy = False

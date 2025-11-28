@@ -1,5 +1,9 @@
-# No external dependencies required
-# Uses only Python standard library:
+# Core dependencies for torus simulator
+# Uses Python standard library:
 # - tkinter for GUI
 # - collections for deque
 # - math for calculations
+
+# Web application dependencies
+Flask==2.3.0
+flask-cors==4.0.0
