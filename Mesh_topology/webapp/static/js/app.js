@@ -510,7 +510,7 @@ function getSimulationMode() {
 
 function isMultiSimulationMode() {
     const mode = getSimulationMode();
-    return mode === 'parallel';
+    return mode === 'parallel' || mode === 'allToOne';
 }
 
 function renderMultiDestinationList() {
@@ -5302,6 +5302,252 @@ async function simulateParallelRoutes() {
     }
 }
 
+async function simulateAllToOne() {
+    if (!topologyData) return;
+    setPickMode(null);
+    stopAnimation();
+    resetAllNodeRuntimeState();
+    resetMultiRunState();
+    syncSelectionState();
+    if (isMobileSidebar() && isSidebarVisible()) {
+        closeSidebar();
+    }
+
+    const destination = parseSelectValue(destinationSelect.value);
+    if (!destination || typeof destination.x !== 'number' || typeof destination.y !== 'number') {
+        hudStatus.textContent = 'Please select a valid destination node for n → 1 parallel simulation.';
+        setStatusIdle('Awaiting destination selection');
+        updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+        return;
+    }
+
+    // Automatically collect all nodes except the destination as sources
+    const allSources = [];
+    const destKey = `${destination.x}-${destination.y}`;
+    
+    if (topologyData && Array.isArray(topologyData.nodes)) {
+        topologyData.nodes.forEach(node => {
+            const nodeKey = `${node.x}-${node.y}`;
+            if (nodeKey !== destKey) {
+                allSources.push({x: node.x, y: node.y});
+            }
+        });
+    }
+
+    const uniqueSources = allSources;
+    const sourceTotal = uniqueSources.length;
+    if (!sourceTotal) {
+        hudStatus.textContent = 'No source nodes available for n → 1 parallel simulation.';
+        setStatusIdle('Awaiting topology');
+        updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+        return;
+    }
+
+    hudStatus.textContent = `Computing ${sourceTotal} parallel route(s) converging to single destination…`;
+
+    try {
+        const rawPayloads = await Promise.all(
+            uniqueSources.map((source) => fetchRoutePayload(source, destination))
+        );
+
+        if (!rawPayloads.length) {
+            hudStatus.textContent = 'No valid routes generated.';
+            setStatusIdle('Awaiting source selection');
+            updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+            return;
+        }
+
+        const packetCount = rawPayloads.length;
+        const destinationNodeId = makeNodeId(destination);
+        
+        const enrichedPayloads = rawPayloads.map((payload, index) => {
+            const pathArray = Array.isArray(payload.path) ? payload.path : [];
+            const computedSource = pathArray.length ? pathArray[0] : payload.source || uniqueSources[index] || null;
+            const sourceAddress = computedSource
+                ? { x: computedSource.x, y: computedSource.y }
+                : { x: uniqueSources[index].x, y: uniqueSources[index].y };
+            return {
+                ...payload,
+                packetIndex: index + 1,
+                packetCount,
+                sourceAddress,
+                destinationAddress: destination,
+            };
+        });
+
+        const queueConfig = new Map();
+        const queueStats = new Map();
+        const routeQueueSummary = new Map();
+        let totalActive = 0;
+        let totalWaiting = 0;
+
+        enrichedPayloads.forEach((payload, index) => {
+            const pathArray = Array.isArray(payload.path) ? payload.path : [];
+            const source = pathArray[0] || payload.source || uniqueSources[index];
+            const neighborNode = pathArray.length > 1 ? pathArray[1] : null;
+            const sourceNodeId = makeNodeId(source);
+            const neighborId = neighborNode ? makeNodeId(neighborNode) : `${payload.packetIndex}`;
+            const queueKey = `${sourceNodeId}->${neighborId}`;
+            const capacity = resolveSendBufferCapacity(sourceNodeId, neighborNode);
+
+            if (!queueConfig.has(queueKey)) {
+                queueConfig.set(queueKey, {
+                    capacity,
+                    sourceId: sourceNodeId,
+                    sourceNode: source,
+                    neighborNode,
+                });
+            } else {
+                const config = queueConfig.get(queueKey);
+                config.capacity = capacity;
+            }
+
+            const stats = queueStats.get(queueKey) || { capacity, active: 0, waiting: 0 };
+            stats.capacity = capacity;
+            const slotAvailable = stats.active < Math.max(1, stats.capacity);
+            if (slotAvailable) {
+                stats.active += 1;
+                totalActive += 1;
+            } else {
+                stats.waiting += 1;
+                totalWaiting += 1;
+            }
+            queueStats.set(queueKey, stats);
+
+            payload.routeIndex = index;
+            payload.queueKey = queueKey;
+            payload.bufferCapacity = capacity;
+            payload.firstHopNode = neighborNode;
+            payload.firstHopId = neighborId;
+            payload.sourceNode = source;
+            payload.sourceNodeId = sourceNodeId;
+            payload.initialQueueState = slotAvailable ? 'active' : 'waiting';
+
+            routeQueueSummary.set(index, {
+                total: 1,
+                active: slotAvailable ? 1 : 0,
+                waiting: slotAvailable ? 0 : 1,
+                delivered: 0,
+            });
+        });
+
+        const previewRoutes = enrichedPayloads.map((payload, index) => {
+            const color = PARALLEL_ROUTE_COLORS[index % PARALLEL_ROUTE_COLORS.length];
+            return new RoutePreview(payload, {
+                renderStyle: 'pending',
+                treeColor: color,
+                ringColor: color,
+                strokeOpacity: 0.35,
+                lineWidth: 3,
+            });
+        });
+
+        multiRunState = {
+            mode: 'allToOne',
+            payloads: enrichedPayloads,
+            currentIndex: null,
+            selectedIndex: 0,
+            completed: new Set(),
+            completedRoutes: [],
+            completedStatuses: [],
+            previewRoutes,
+            destination,
+            queueConfig,
+            routeQueueSummary,
+            totalPackets: packetCount,
+        };
+
+        summary.textContent = `All-to-one parallel: ${packetCount} source(s) → 1 destination · Packets: ${packetCount}`;
+        renderMultiRouteList();
+
+        const flowEntries = enrichedPayloads.map((payload, index) => {
+            const pathArray = Array.isArray(payload.path) ? payload.path : [];
+            const source = pathArray[0] || payload.source || uniqueSources[index];
+            return {
+                phase: `Packet ${index + 1}`,
+                title: `${safeNodeLabel(source)} → ${safeNodeLabel(destination)}`,
+                details: [
+                    `Hop count: ${payload.hopCount ?? 0}`,
+                    `Segments: ${Array.isArray(payload.segments) ? payload.segments.length : 0}`,
+                ],
+            };
+        });
+        renderFlow(flowEntries);
+        setDetailedLog(
+            buildDetailedLogForParallelPayloads(enrichedPayloads, {
+                mode: 'allToOne',
+                queueConfig,
+                routeSummary: routeQueueSummary,
+            }),
+            {
+                title: `n → 1 log · ${sourceTotal} source${sourceTotal === 1 ? '' : 's'} → ${nodeLabel(destination)}`,
+            },
+        );
+
+        const firstPayload = enrichedPayloads[0];
+        if (firstPayload) {
+            const previewEntry = Array.isArray(multiRunState.previewRoutes)
+                ? multiRunState.previewRoutes[0]
+                : null;
+            const previewColors = previewEntry
+                ? {
+                    treeColor: previewEntry.treeColor,
+                    ringColor: previewEntry.ringColor,
+                    strokeOpacity: 0.85,
+                    lineWidth: 4,
+                }
+                : null;
+            prepareRoute(firstPayload, {
+                contextLabel: `Packet 1 of ${packetCount}`,
+                previewColors,
+                buttonLabel: 'Animate all',
+            });
+            lastRoutePayload = firstPayload;
+        }
+
+        hudStatus.textContent = `All-to-one parallel routes ready (${packetCount}). Press "Animate all" to see simultaneous transmission.`;
+        const hasSegments = enrichedPayloads.some((payload) => Array.isArray(payload.segments) && payload.segments.length);
+        updateAnimateButton({ disabled: !hasSegments, busy: false, label: 'Animate all' });
+
+        const snapshotTimestamp = performance.now();
+        queueConfig.forEach((config, key) => {
+            const stats = queueStats.get(key) || { active: 0, waiting: 0 };
+            const ifaceRuntime = ensureInterfaceRuntimeState(config.sourceId, config.neighborNode);
+            if (ifaceRuntime && ifaceRuntime.sendBuffer) {
+                ifaceRuntime.sendBuffer.capacity = config.capacity;
+                ifaceRuntime.sendBuffer.used = stats.active;
+                ifaceRuntime.sendBuffer.queue = stats.waiting;
+                ifaceRuntime.sendBuffer.state = stats.active > 0
+                    ? 'primed'
+                    : (stats.waiting > 0 ? 'primed' : 'idle');
+            }
+        });
+        
+        // Set runtime state for all source nodes
+        enrichedPayloads.forEach(payload => {
+            const sourceRuntime = ensureNodeRuntimeState(payload.sourceNodeId);
+            sourceRuntime.pendingOutbound = 1;
+            sourceRuntime.sendBuffer = 'primed';
+            sourceRuntime.handshake = 'primed';
+            sourceRuntime.lastUpdated = snapshotTimestamp;
+        });
+        
+        if (isNodePanelOpen()) {
+            updateNodePanelContent();
+        }
+
+    } catch (error) {
+        console.error(error);
+        const message = error.message || 'Routing failed';
+        hudStatus.textContent = message;
+        setStatusIdle(message);
+        updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+        setDetailedLog([]);
+        resetMultiRunState();
+        updateAnimationControlState();
+    }
+}
+
 async function simulateNmRoutes() {
     if (!topologyData) return;
     setPickMode(null);
@@ -5654,7 +5900,7 @@ function prepareRoute(payload, options = {}) {
 function playAnimation() {
     if (
         multiRunState
-        && (multiRunState.mode === 'parallel' || multiRunState.mode === 'nm')
+        && (multiRunState.mode === 'parallel' || multiRunState.mode === 'allToOne' || multiRunState.mode === 'nm')
     ) {
         const payloadList = multiRunState.mode === 'nm'
             ? multiRunState.packetPayloads || []
@@ -5665,6 +5911,8 @@ function playAnimation() {
         }
         const completionMessage = multiRunState.mode === 'nm'
             ? 'n → m plan complete'
+            : multiRunState.mode === 'allToOne'
+            ? 'All-to-one parallel transmissions complete'
             : 'Parallel transmissions complete';
         startAnimation(payloadList[0], {
             parallelPayloads: payloadList,
@@ -5739,7 +5987,7 @@ function startAnimation(payload, options = {}) {
         if (!animationState) return;
         animationState.update(timestamp);
 
-        if (animationState.mode === 'parallel' || animationState.mode === 'nm') {
+        if (animationState.mode === 'parallel' || animationState.mode === 'allToOne' || animationState.mode === 'nm') {
             const activeEntries = typeof animationState.getActiveEntries === 'function'
                 ? animationState.getActiveEntries()
                 : Array.isArray(animationState.animations)
@@ -5780,7 +6028,7 @@ function startAnimation(payload, options = {}) {
 
         renderTopology();
 
-        const isComplete = animationState.mode === 'parallel'
+        const isComplete = animationState.mode === 'parallel' || animationState.mode === 'allToOne'
             ? animationState.isComplete()
             : animationState.isComplete();
 
@@ -5788,12 +6036,14 @@ function startAnimation(payload, options = {}) {
             const multiMode = multiRunState?.mode || null;
             const completionMessage = multiMode === 'nm'
                 ? 'n → m plan complete'
-                : animationState.mode === 'parallel'
-                    ? 'Parallel transmissions complete'
-                    : 'Transmission complete';
+                : multiMode === 'allToOne'
+                    ? 'All-to-one parallel transmissions complete'
+                    : animationState.mode === 'parallel'
+                        ? 'Parallel transmissions complete'
+                        : 'Transmission complete';
             const transferLabel = multiMode === 'nm'
                 ? 'Routes delivered'
-                : animationState.mode === 'parallel'
+                : (animationState.mode === 'parallel' || animationState.mode === 'allToOne')
                     ? 'Packets delivered'
                     : 'Packet delivered';
 
@@ -6103,6 +6353,9 @@ function runSimulationByMode() {
         case 'parallel':
             simulateParallelRoutes();
             break;
+        case 'allToOne':
+            simulateAllToOne();
+            break;
         case 'nm':
             simulateNmRoutes();
             break;
@@ -6339,14 +6592,15 @@ renderMultiDestinationList();
 function applySimulationModeUI(mode) {
     const normalizedMode = mode || (simulationModeSelect ? simulationModeSelect.value : 'single');
     const isParallel = normalizedMode === 'parallel';
+    const isAllToOne = normalizedMode === 'allToOne';
     const isNm = normalizedMode === 'nm';
 
     setPickMode(null);
 
     if (sourceField) {
-        setElementVisibility(sourceField, !isNm);
+        setElementVisibility(sourceField, !isNm && !isAllToOne);
     }
-    setElementVisibility(singleDestinationField, normalizedMode === 'single');
+    setElementVisibility(singleDestinationField, normalizedMode === 'single' || isAllToOne);
     setElementVisibility(multiDestinationField, false); // Hide destination selection in parallel mode
     setElementVisibility(nmRouteField, isNm);
 
@@ -6367,6 +6621,18 @@ function applySimulationModeUI(mode) {
         }
         renderMultiDestinationList();
         syncSelectionState();
+    } else if (isAllToOne) {
+        currentSourceId = null;
+        if (destinationSelect) {
+            let fallback = destinationSelect.value;
+            if (!fallback && destinationSelect.options.length) {
+                fallback = destinationSelect.options[0].value;
+            }
+            if (fallback) {
+                setSelectValue(destinationSelect, fallback);
+            }
+        }
+        syncSelectionState();
     } else if (isNm) {
         currentSourceId = null;
         currentDestinationId = null;
@@ -6379,7 +6645,7 @@ function applySimulationModeUI(mode) {
         syncSelectionState();
     }
 
-    if (isParallel || isNm) {
+    if (isParallel || isAllToOne || isNm) {
         updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
     } else {
         updateAnimateButton({ disabled: true, busy: false, label: animateBtn?.dataset?.defaultLabel });
@@ -6399,6 +6665,8 @@ if (simulationModeSelect) {
         summary.textContent = '';
         if (simulationModeSelect.value === 'parallel') {
             hudStatus.textContent = '1 → n parallel mode: Select source node. Packets will be sent to all other nodes.';
+        } else if (simulationModeSelect.value === 'allToOne') {
+            hudStatus.textContent = 'n → 1 parallel mode: Select destination node. All other nodes will send packets simultaneously.';
         } else if (simulationModeSelect.value === 'nm') {
             hudStatus.textContent = 'n → m mode selected. Add rows to the route plan table to define transmissions.';
         } else {
