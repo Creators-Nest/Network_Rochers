@@ -44,7 +44,7 @@
                         <label for="simulationMode">Simulation type</label>
                         <select id="simulationMode">
                             <option value="single">1 → 1</option>
-                            <option value="parallel">1 → n (parallel)</option>
+                            <option value="parallel">1 → n (all nodes)</option>
                             <option value="nm">n → m (parallel)</option>
                         </select>
                     </div>
@@ -233,18 +233,6 @@
                         <span id="hudStatus">Idle</span>
                     </div>
                     <div class="canvas-controls" role="group" aria-label="Canvas and animation controls">
-                        <button id="interfaceModeBtn" class="canvas-control-btn" type="button" aria-pressed="false" aria-label="Toggle interface view" title="Click to view node interfaces">
-                            <svg viewBox="0 0 24 24" aria-hidden="true">
-                                <rect x="3" y="3" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"></rect>
-                                <rect x="14" y="3" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"></rect>
-                                <rect x="3" y="14" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"></rect>
-                                <rect x="14" y="14" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"></rect>
-                                <line x1="10" y1="6.5" x2="14" y2="6.5" stroke="currentColor" stroke-width="1.5"></line>
-                                <line x1="10" y1="17.5" x2="14" y2="17.5" stroke="currentColor" stroke-width="1.5"></line>
-                                <line x1="6.5" y1="10" x2="6.5" y2="14" stroke="currentColor" stroke-width="1.5"></line>
-                                <line x1="17.5" y1="10" x2="17.5" y2="14" stroke="currentColor" stroke-width="1.5"></line>
-                            </svg>
-                        </button>
                         <button id="cursorModeBtn" class="canvas-control-btn" type="button" aria-pressed="false" aria-label="Toggle scroll zoom" title="Toggle scroll zoom">
                             <svg viewBox="0 0 24 24" aria-hidden="true">
                                 <polygon points="4,3 19.1,11.6 13.5,12.8 16.7,20.8 14.2,21.9 11,13.7 7.4,17.3" fill="currentColor"></polygon>
@@ -377,89 +365,6 @@
     </div>
 
     <div id="nodePanelScrim" class="node-panel__scrim" aria-hidden="true"></div>
-
-    <!-- Interface Live View Panel -->
-    <div id="interfacePanel" class="interface-panel">
-        <div class="interface-panel__header">
-            <h3 id="interfacePanelTitle">Node Interface</h3>
-            <button id="interfacePanelClose" class="interface-panel__close" type="button" aria-label="Close interface view">&times;</button>
-        </div>
-        <div class="interface-panel__body">
-            <!-- Signal Status -->
-            <div class="interface-panel__section">
-                <h4>Handshake Signals</h4>
-                <div class="signal-grid">
-                    <div id="interfaceReq" class="signal-status" data-active="false">
-                        <span class="signal-status__label">REQ</span>
-                        <span class="signal-status__value">LOW</span>
-                    </div>
-                    <div id="interfaceAck" class="signal-status" data-active="false">
-                        <span class="signal-status__label">ACK</span>
-                        <span class="signal-status__value">LOW</span>
-                    </div>
-                    <div id="interfaceData" class="signal-status" data-active="false">
-                        <span class="signal-status__label">DATA</span>
-                        <span class="signal-status__value">LOW</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Send Buffers -->
-            <div class="interface-panel__section">
-                <h4>Send Buffers</h4>
-                <div class="buffer-grid">
-                    <div id="sendBuffer0" class="buffer-slot" data-state="empty">
-                        <span class="buffer-slot__index">Buffer 0</span>
-                        <div class="buffer-slot__content">—</div>
-                    </div>
-                    <div id="sendBuffer1" class="buffer-slot" data-state="empty">
-                        <span class="buffer-slot__index">Buffer 1</span>
-                        <div class="buffer-slot__content">—</div>
-                    </div>
-                    <div id="sendBuffer2" class="buffer-slot" data-state="empty">
-                        <span class="buffer-slot__index">Buffer 2</span>
-                        <div class="buffer-slot__content">—</div>
-                    </div>
-                    <div id="sendBuffer3" class="buffer-slot" data-state="empty">
-                        <span class="buffer-slot__index">Buffer 3</span>
-                        <div class="buffer-slot__content">—</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Receive Buffers -->
-            <div class="interface-panel__section">
-                <h4>Receive Buffers</h4>
-                <div class="buffer-grid">
-                    <div id="recvBuffer0" class="buffer-slot" data-state="empty">
-                        <span class="buffer-slot__index">Buffer 0</span>
-                        <div class="buffer-slot__content">—</div>
-                    </div>
-                    <div id="recvBuffer1" class="buffer-slot" data-state="empty">
-                        <span class="buffer-slot__index">Buffer 1</span>
-                        <div class="buffer-slot__content">—</div>
-                    </div>
-                    <div id="recvBuffer2" class="buffer-slot" data-state="empty">
-                        <span class="buffer-slot__index">Buffer 2</span>
-                        <div class="buffer-slot__content">—</div>
-                    </div>
-                    <div id="recvBuffer3" class="buffer-slot" data-state="empty">
-                        <span class="buffer-slot__index">Buffer 3</span>
-                        <div class="buffer-slot__content">—</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Interface Direction -->
-            <div class="interface-panel__section">
-                <h4>Active Interface</h4>
-                <div class="interface-direction" data-active="false">
-                    <span class="interface-direction__label">Direction</span>
-                    <span id="interfaceDirection" class="interface-direction__value">None</span>
-                </div>
-            </div>
-        </div>
-    </div>
 
     <div id="logModal" class="modal" aria-hidden="true">
         <div class="modal__overlay" data-close-modal="true"></div>

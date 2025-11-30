@@ -43,10 +43,6 @@ const zoomInBtn = document.getElementById('zoomInBtn');
 const zoomOutBtn = document.getElementById('zoomOutBtn');
 const resetViewBtn = document.getElementById('resetViewBtn');
 const cursorModeBtn = document.getElementById('cursorModeBtn');
-const interfaceModeBtn = document.getElementById('interfaceModeBtn');
-const interfacePanel = document.getElementById('interfacePanel');
-const interfacePanelClose = document.getElementById('interfacePanelClose');
-const interfacePanelTitle = document.getElementById('interfacePanelTitle');
 const restartAnimationBtn = document.getElementById('restartAnimationBtn');
 const sidebarToggle = document.getElementById('sidebarToggle');
 const sidebarCloseBtn = document.getElementById('sidebarClose');
@@ -237,17 +233,6 @@ let currentDestinationId = null;
 let nodeOptionsCache = [];
 let suppressCandidateSelectChange = false;
 let speedMenuOpen = false;
-
-// Hover state for interface visualization
-let hoverState = {
-    nodeId: null,
-    startTime: null,
-    showInterfaces: false,
-};
-
-// Interface mode state
-let interfaceMode = false;
-let selectedInterfaceNode = null;
 
 if (animateBtn) {
     animateBtn.dataset.defaultLabel = animateBtn.textContent;
@@ -3128,98 +3113,8 @@ function drawNodes(layout) {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
         ctx.fillText(nodeLabel(node), pos.x, pos.y + size/2 + 4);
-        
-        // Draw active interfaces on hover after 2 seconds
-        if (hoverState.showInterfaces && hoverState.nodeId === nodeId) {
-            drawActiveInterfaces(node, pos, size);
-        }
     });
     ctx.restore();
-}
-
-function drawActiveInterfaces(node, pos, nodeSize) {
-    if (!currentSimulation || !currentSimulation.nodeStates) return;
-    
-    const nodeId = makeNodeId(node);
-    const nodeState = currentSimulation.nodeStates.get(nodeId);
-    if (!nodeState) return;
-    
-    // Get node metadata to find interfaces
-    const meta = topologyData.nodes.find(n => makeNodeId(n) === nodeId);
-    if (!meta || !meta.neighbors) return;
-    
-    const interfaceSize = 12;
-    const offset = nodeSize/2 + 8;
-    
-    // Draw interfaces for each neighbor (N, E, S, W)
-    meta.neighbors.forEach((neighbor, idx) => {
-        const neighborId = makeNodeId(neighbor);
-        const interfaceState = nodeState.interfaces?.get(neighborId);
-        
-        // Only show active interfaces (not idle)
-        if (!interfaceState || 
-            (interfaceState.sendBuffer === 'idle' && 
-             interfaceState.receiveBuffer === 'idle' && 
-             interfaceState.handshake === 'idle')) {
-            return;
-        }
-        
-        // Determine direction based on neighbor position
-        let dx = neighbor.x - node.x;
-        let dy = neighbor.y - node.y;
-        let ifaceX = pos.x;
-        let ifaceY = pos.y;
-        
-        if (dx > 0) { // East
-            ifaceX = pos.x + offset;
-        } else if (dx < 0) { // West
-            ifaceX = pos.x - offset;
-        }
-        
-        if (dy > 0) { // South
-            ifaceY = pos.y + offset;
-        } else if (dy < 0) { // North
-            ifaceY = pos.y - offset;
-        }
-        
-        // Draw interface indicator
-        ctx.save();
-        
-        // Background
-        ctx.fillStyle = 'rgba(30, 41, 59, 0.95)';
-        ctx.fillRect(ifaceX - interfaceSize/2, ifaceY - interfaceSize/2, interfaceSize, interfaceSize);
-        
-        // Border based on state
-        let borderColor = colors.node;
-        if (interfaceState.sendBuffer === 'transferring' || 
-            interfaceState.receiveBuffer === 'receiving') {
-            borderColor = '#10b981'; // Green for active transfer
-        } else if (interfaceState.handshake === 'waiting' || 
-                   interfaceState.handshake === 'primed') {
-            borderColor = '#f59e0b'; // Orange for handshake
-        }
-        
-        ctx.strokeStyle = borderColor;
-        ctx.lineWidth = 2;
-        ctx.strokeRect(ifaceX - interfaceSize/2, ifaceY - interfaceSize/2, interfaceSize, interfaceSize);
-        
-        // Draw buffer state indicators (small colored dots)
-        const dotSize = 3;
-        if (interfaceState.sendBuffer !== 'idle') {
-            ctx.fillStyle = interfaceState.sendBuffer === 'transferring' ? '#10b981' : '#f59e0b';
-            ctx.beginPath();
-            ctx.arc(ifaceX - 3, ifaceY, dotSize/2, 0, Math.PI * 2);
-            ctx.fill();
-        }
-        if (interfaceState.receiveBuffer !== 'idle') {
-            ctx.fillStyle = interfaceState.receiveBuffer === 'receiving' ? '#10b981' : '#f59e0b';
-            ctx.beginPath();
-            ctx.arc(ifaceX + 3, ifaceY, dotSize/2, 0, Math.PI * 2);
-            ctx.fill();
-        }
-        
-        ctx.restore();
-    });
 }
 
 function meshGridPoint(fromNode, toNode, progress, layout) {
@@ -3633,9 +3528,6 @@ function renderTopology() {
             });
         }
     }
-    
-    // Update interface panel if visible
-    updateInterfacePanel();
 }
 
 // Replace the RouteAnimation class with this updated version
@@ -5169,27 +5061,31 @@ async function simulateParallelRoutes() {
     }
 
     const source = parseSelectValue(sourceSelect.value);
-    const destinations = collectSelectedDestinations();
-    const sourceKey = `${source.x}-${source.y}`;
-    const dedupe = new Map();
-    destinations.forEach((dest) => {
-        if (!dest || typeof dest.x !== 'number' || typeof dest.y !== 'number') {
-            return;
-        }
-        const key = `${dest.x}-${dest.y}`;
-        if (key === sourceKey) {
-            return;
-        }
-        if (!dedupe.has(key)) {
-            dedupe.set(key, dest);
-        }
-    });
+    if (!source || typeof source.x !== 'number' || typeof source.y !== 'number') {
+        hudStatus.textContent = 'Please select a valid source node for 1 → n parallel simulation.';
+        setStatusIdle('Awaiting source selection');
+        updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+        return;
+    }
 
-    const uniqueDestinations = Array.from(dedupe.values());
+    // Automatically collect all nodes except the source as destinations
+    const allDestinations = [];
+    const sourceKey = `${source.x}-${source.y}`;
+    
+    if (topologyData && Array.isArray(topologyData.nodes)) {
+        topologyData.nodes.forEach(node => {
+            const nodeKey = `${node.x}-${node.y}`;
+            if (nodeKey !== sourceKey) {
+                allDestinations.push({x: node.x, y: node.y});
+            }
+        });
+    }
+
+    const uniqueDestinations = allDestinations;
     const destinationTotal = uniqueDestinations.length;
     if (!destinationTotal) {
-        hudStatus.textContent = 'Add one or more destination nodes for 1 → n parallel simulation.';
-        setStatusIdle('Awaiting destination selection');
+        hudStatus.textContent = 'No destination nodes available for 1 → n parallel simulation.';
+        setStatusIdle('Awaiting topology');
         updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
         return;
     }
@@ -6093,33 +5989,6 @@ canvas.addEventListener('pointermove', (event) => {
         renderTopology();
         return;
     }
-    
-    // Handle hover for interface visualization
-    const nodeId = findNodeAtPosition(event.offsetX, event.offsetY);
-    
-    if (nodeId) {
-        if (hoverState.nodeId !== nodeId) {
-            // New node, reset timer
-            hoverState.nodeId = nodeId;
-            hoverState.startTime = Date.now();
-            hoverState.showInterfaces = false;
-        } else if (!hoverState.showInterfaces) {
-            // Same node, check if 2 seconds elapsed
-            const elapsed = Date.now() - hoverState.startTime;
-            if (elapsed >= 2000) {
-                hoverState.showInterfaces = true;
-                renderTopology();
-            }
-        }
-    } else {
-        // No node hovered, reset
-        if (hoverState.nodeId !== null || hoverState.showInterfaces) {
-            hoverState.nodeId = null;
-            hoverState.startTime = null;
-            hoverState.showInterfaces = false;
-            renderTopology();
-        }
-    }
 });
 
 function endPan(event) {
@@ -6139,11 +6008,6 @@ canvas.addEventListener('click', (event) => {
     }
     const nodeId = findNodeAtPosition(event.offsetX, event.offsetY);
     if (nodeId) {
-        // Interface mode takes priority
-        if (interfaceMode) {
-            drawNodeInterface(nodeId);
-            return;
-        }
         handleCanvasNodeClick(nodeId);
         return;
     }
@@ -6483,7 +6347,7 @@ function applySimulationModeUI(mode) {
         setElementVisibility(sourceField, !isNm);
     }
     setElementVisibility(singleDestinationField, normalizedMode === 'single');
-    setElementVisibility(multiDestinationField, isParallel);
+    setElementVisibility(multiDestinationField, false); // Hide destination selection in parallel mode
     setElementVisibility(nmRouteField, isNm);
 
     if (multiRouteList) {
@@ -6534,7 +6398,7 @@ if (simulationModeSelect) {
         resetSimulation();
         summary.textContent = '';
         if (simulationModeSelect.value === 'parallel') {
-            hudStatus.textContent = 'Parallel mode selected. Choose multiple destinations to animate together.';
+            hudStatus.textContent = '1 → n parallel mode: Select source node. Packets will be sent to all other nodes.';
         } else if (simulationModeSelect.value === 'nm') {
             hudStatus.textContent = 'n → m mode selected. Add rows to the route plan table to define transmissions.';
         } else {
@@ -6556,207 +6420,7 @@ updateAnimationControlState();
 
 setDetailedLog([]);
 
-// Check hover timer periodically to trigger interface display
-setInterval(() => {
-    if (hoverState.nodeId && !hoverState.showInterfaces && hoverState.startTime) {
-        const elapsed = Date.now() - hoverState.startTime;
-        if (elapsed >= 2000) {
-            hoverState.showInterfaces = true;
-            renderTopology();
-        }
-    }
-}, 100); // Check every 100ms
-
 fetchTopology()
     .then(() => {
         resizeCanvas();
     });
-
-// Interface Mode Functions
-function toggleInterfaceMode() {
-    interfaceMode = !interfaceMode;
-    console.log('Interface mode toggled:', interfaceMode);
-    
-    if (interfaceModeBtn) {
-        interfaceModeBtn.setAttribute('aria-pressed', interfaceMode ? 'true' : 'false');
-        interfaceModeBtn.classList.toggle('is-active', interfaceMode);
-        interfaceModeBtn.style.backgroundColor = interfaceMode ? '#3b82f6' : '';
-        interfaceModeBtn.style.color = interfaceMode ? '#ffffff' : '';
-    }
-    if (interfaceMode) {
-        if (hudStatus) {
-            hudStatus.textContent = 'Interface mode: Click any node to view its interface';
-        }
-    } else {
-        if (hudStatus) {
-            hudStatus.textContent = 'Interface mode disabled';
-        }
-        // Close interface panel when mode is disabled
-        if (interfacePanel) {
-            interfacePanel.classList.remove('is-visible');
-        }
-    }
-}
-
-function drawNodeInterface(nodeId) {
-    const meta = nodeMeta.get(nodeId);
-    if (!meta) {
-        console.log('Node metadata not found for:', nodeId);
-        return;
-    }
-    
-    const node = topologyData.nodes.find(n => makeNodeId(n) === nodeId);
-    if (!node) {
-        console.log('Node not found in topology:', nodeId);
-        return;
-    }
-    
-    selectedInterfaceNode = nodeId;
-    
-    console.log('Opening interface panel for node:', nodeId, 'Node coords:', node.x, node.y);
-    
-    // Update panel title
-    if (interfacePanelTitle) {
-        interfacePanelTitle.textContent = `Node (${node.x}, ${node.y}) Interface`;
-    }
-    
-    // Get runtime state
-    const runtimeState = nodeRuntimeState.get(nodeId);
-    console.log('Runtime state:', runtimeState);
-    
-    // Update signal indicators
-    updateSignalIndicator('interfaceReq', runtimeState?.signals?.req || false);
-    updateSignalIndicator('interfaceAck', runtimeState?.signals?.ack || false);
-    updateSignalIndicator('interfaceData', runtimeState?.signals?.data || false);
-    
-    // Update send buffers
-    for (let i = 0; i < 4; i++) {
-        const bufferId = `sendBuffer${i}`;
-        const buffer = runtimeState?.sendBuffers?.[i];
-        updateBufferSlot(bufferId, buffer);
-    }
-    
-    // Update receive buffers
-    for (let i = 0; i < 4; i++) {
-        const bufferId = `recvBuffer${i}`;
-        const buffer = runtimeState?.receiveBuffers?.[i];
-        updateBufferSlot(bufferId, buffer);
-    }
-    
-    // Update active interface direction
-    const directionDisplay = document.getElementById('interfaceDirection');
-    if (directionDisplay && runtimeState?.activeInterface) {
-        directionDisplay.textContent = runtimeState.activeInterface;
-        directionDisplay.parentElement.setAttribute('data-active', 'true');
-    } else if (directionDisplay) {
-        directionDisplay.textContent = 'None';
-        directionDisplay.parentElement.setAttribute('data-active', 'false');
-    }
-    
-    // Show panel
-    if (interfacePanel) {
-        console.log('Adding is-visible class to panel');
-        interfacePanel.classList.add('is-visible');
-    } else {
-        console.error('Interface panel element not found!');
-    }
-}
-
-function updateSignalIndicator(elementId, isActive) {
-    const element = document.getElementById(elementId);
-    if (!element) return;
-    
-    element.setAttribute('data-active', isActive ? 'true' : 'false');
-    const valueSpan = element.querySelector('.signal-status__value');
-    if (valueSpan) {
-        valueSpan.textContent = isActive ? 'HIGH' : 'LOW';
-    }
-}
-
-function updateBufferSlot(bufferId, bufferData) {
-    const slotElement = document.getElementById(bufferId);
-    if (!slotElement) return;
-    
-    const contentElement = slotElement.querySelector('.buffer-slot__content');
-    if (!contentElement) return;
-    
-    if (!bufferData || bufferData.state === 'empty') {
-        slotElement.setAttribute('data-state', 'empty');
-        contentElement.textContent = '—';
-    } else if (bufferData.state === 'active') {
-        slotElement.setAttribute('data-state', 'active');
-        contentElement.textContent = bufferData.packet ? 
-            `P${bufferData.packet.id} → (${bufferData.packet.dest.x},${bufferData.packet.dest.y})` : 
-            'Active';
-    } else if (bufferData.state === 'filled') {
-        slotElement.setAttribute('data-state', 'filled');
-        contentElement.textContent = bufferData.packet ? 
-            `P${bufferData.packet.id} → (${bufferData.packet.dest.x},${bufferData.packet.dest.y})` : 
-            'Filled';
-    }
-}
-
-// Update interface panel during simulation
-function updateInterfacePanel() {
-    if (!interfacePanel || !interfacePanel.classList.contains('is-visible')) {
-        return;
-    }
-    
-    if (!selectedInterfaceNode) {
-        return;
-    }
-    
-    const runtimeState = nodeRuntimeState.get(selectedInterfaceNode);
-    if (!runtimeState) return;
-    
-    // Update signals
-    updateSignalIndicator('interfaceReq', runtimeState.signals?.req || false);
-    updateSignalIndicator('interfaceAck', runtimeState.signals?.ack || false);
-    updateSignalIndicator('interfaceData', runtimeState.signals?.data || false);
-    
-    // Update send buffers
-    for (let i = 0; i < 4; i++) {
-        const bufferId = `sendBuffer${i}`;
-        const buffer = runtimeState.sendBuffers?.[i];
-        updateBufferSlot(bufferId, buffer);
-    }
-    
-    // Update receive buffers
-    for (let i = 0; i < 4; i++) {
-        const bufferId = `recvBuffer${i}`;
-        const buffer = runtimeState.receiveBuffers?.[i];
-        updateBufferSlot(bufferId, buffer);
-    }
-    
-    // Update active interface
-    const directionDisplay = document.getElementById('interfaceDirection');
-    if (directionDisplay && runtimeState.activeInterface) {
-        directionDisplay.textContent = runtimeState.activeInterface;
-        directionDisplay.parentElement.setAttribute('data-active', 'true');
-    } else if (directionDisplay) {
-        directionDisplay.textContent = 'None';
-        directionDisplay.parentElement.setAttribute('data-active', 'false');
-    }
-}
-
-// Event listeners for interface mode
-console.log('Setting up interface mode listeners...');
-console.log('interfaceModeBtn:', interfaceModeBtn);
-console.log('interfacePanel:', interfacePanel);
-console.log('interfacePanelClose:', interfacePanelClose);
-
-if (interfaceModeBtn) {
-    interfaceModeBtn.addEventListener('click', toggleInterfaceMode);
-    console.log('Interface mode button listener added');
-}
-
-if (interfacePanelClose) {
-    interfacePanelClose.addEventListener('click', () => {
-        console.log('Close button clicked');
-        if (interfacePanel) {
-            interfacePanel.classList.remove('is-visible');
-        }
-    });
-    console.log('Interface panel close listener added');
-}
-
