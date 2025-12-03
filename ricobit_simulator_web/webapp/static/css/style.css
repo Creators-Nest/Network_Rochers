@@ -1223,7 +1223,7 @@ body.modal-open {
 
 .nm-route-actions {
     display: flex;
-    gap: 8px;
+    gap: 7px;
     margin-top: 10px;
 }
 .nm-route-table::-webkit-scrollbar{
