@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_from_directory
 
 from ..simulation.simulator import Simulator
 from ..topology.ricobit_topology import RiCoBiT_Topology
 
 NodeAddress = Tuple[int, int]
+
+ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 
 
 @dataclass
@@ -271,6 +274,10 @@ def create_app(num_levels: int = 5) -> Flask:
 
     app = Flask(__name__, template_folder="templates", static_folder="static")
     state = AppState(num_levels=num_levels)
+
+    @app.route("/assets/<path:filename>")
+    def serve_asset(filename: str):
+        return send_from_directory(str(ASSETS_DIR), filename)
 
     def parse_address(payload_key: str, payload: Dict[str, object]) -> NodeAddress:
         node_payload = payload.get(payload_key)
