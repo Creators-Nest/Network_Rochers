@@ -3,6 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="../../assets/logo.png" type="image/png">
     <title>RicoBit Network Visualizer</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
@@ -36,20 +37,45 @@
 
                 <section class="sidebar__section" aria-labelledby="routing-controls">
                     <h2 id="routing-controls">Routing</h2>
-                    <div class="form-control">
-                        <label for="simulationMode">Simulation type</label>
-                        <select id="simulationMode">
-                            <option value="single">1 → 1</option>
-                            <option value="parallel">1 → n (parallel)</option>
-                            <option value="nm">n → m (parallel)</option>
-                        </select>
+                    <div class="form-control form-control--mode">
+                        <label id="simulationModeLabel">Simulation type</label>
+                        <div class="simulation-mode-select">
+                            <select id="simulationMode" class="sr-only" aria-labelledby="simulationModeLabel">
+                                <option value="single">1 → 1</option>
+                                <option value="parallel">1 → n (parallel)</option>
+                                <option value="parallelSources">n → 1 (parallel)</option>
+                                <option value="nm">n → m (parallel)</option>
+                            </select>
+                            <div class="custom-select" id="customSimulationMode" role="listbox" aria-labelledby="simulationModeLabel" tabindex="0">
+                                <div class="custom-select__trigger" aria-haspopup="listbox">
+                                    <span class="custom-select__value">1 → 1</span>
+                                    <span class="custom-select__arrow" aria-hidden="true">▾</span>
+                                </div>
+                                <ul class="custom-select__options" role="presentation">
+                                    <li class="custom-select__option" role="option" data-value="single" aria-selected="true">1 → 1</li>
+                                    <li class="custom-select__option" role="option" data-value="parallel" aria-selected="false">1 → n (parallel)</li>
+                                    <li class="custom-select__option" role="option" data-value="parallelSources" aria-selected="false">n → 1 (parallel)</li>
+                                    <li class="custom-select__option" role="option" data-value="nm" aria-selected="false">n → m (parallel)</li>
+                                </ul>
+                            </div>
+                        </div>
                     </div>
+                    <div id="simulationModeHint" class="simulation-mode-hint" role="status" aria-live="polite" hidden></div>
                     <div class="form-control">
                         <label for="sourceSelect">🟢 Source node</label>
                         <div class="input-with-action">
                             <select id="sourceSelect"></select>
                             <button id="pickSourceBtn" class="mini-btn" type="button" aria-pressed="false" title="Pick source from canvas">Pick</button>
                         </div>
+                    </div>
+                    <div class="form-control" data-mode-area="multi-source" style="display: none;">
+                        <label for="sourceCandidateSelect">🟢 Source nodes</label>
+                        <div class="input-with-action">
+                            <select id="sourceCandidateSelect"></select>
+                            <button id="clearMultiSourcesBtn" class="mini-btn" type="button" title="Clear sources">Clear all</button>
+                            <button id="pickSourceMultiBtn" class="mini-btn" type="button" aria-pressed="false" title="Pick &amp; add source from canvas">Pick</button>
+                        </div>
+                        <div id="multiSourceList" class="destination-list" role="list"></div>
                     </div>
                     <div class="form-control" data-mode-area="single">
                         <label for="destinationSelect">🔴 Destination node</label>
@@ -86,6 +112,7 @@
                         </div>
                         <div class="nm-route-actions">
                             <button id="addNmRouteBtn" class="mini-btn" type="button">Add route</button>
+                            <button id="importNmRoutesBtn" class="mini-btn" type="button">Import CSV</button>
                             <button id="clearNmRoutesBtn" class="mini-btn" type="button">Clear all</button>
                         </div>
                     </div>
@@ -380,6 +407,71 @@
         </div>
     </div>
 
+    <div id="importCsvModal" class="modal" aria-hidden="true">
+        <div class="modal__overlay" data-close-import-modal="true"></div>
+        <div class="modal__content" role="dialog" aria-modal="true" aria-labelledby="importCsvModalTitle">
+            <header class="modal__header">
+                <div class="modal__heading">
+                    <h2 id="importCsvModalTitle">Import Routes from CSV</h2>
+                    <p class="modal__subtitle">Drop a CSV file or click to browse</p>
+                </div>
+                <div class="modal__actions">
+                    <button id="importCsvModalClose" class="modal__close" type="button" aria-label="Close import modal">&times;</button>
+                </div>
+            </header>
+            <div id="importCsvModalBody" class="modal__body">
+                <div id="csvDropZone" class="csv-drop-zone" role="button" tabindex="0" aria-label="Drop CSV file here or click to browse">
+                    <div class="csv-drop-zone__icon" aria-hidden="true">
+                        <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M28 8H12a4 4 0 0 0-4 4v24a4 4 0 0 0 4 4h24a4 4 0 0 0 4-4V20L28 8z"/>
+                            <polyline points="28 8 28 20 40 20"/>
+                            <line x1="24" y1="28" x2="24" y2="38"/>
+                            <polyline points="18 32 24 26 30 32"/>
+                        </svg>
+                    </div>
+                    <p class="csv-drop-zone__text">Drag & drop your CSV file here</p>
+                    <p class="csv-drop-zone__hint">or click to browse</p>
+                    <input type="file" id="csvFileInput" accept=".csv,text/csv" hidden />
+                </div>
+                <div id="csvFormatHint" class="csv-format-hint">
+                    <p><strong>Expected CSV format:</strong></p>
+                    <code>Source,Destination,Packets</code>
+                    <p class="csv-format-example">Example: <code>0-0,1-2,5</code> or <code>"0-0","1-2","5"</code></p>
+                    <p class="csv-format-note">Node IDs should be in <code>ring-index</code> format (e.g., 0-0, 1-3, 2-5)</p>
+                </div>
+                <div id="csvPreviewSection" class="csv-preview-section" style="display: none;">
+                    <h3 class="csv-preview-title">Preview</h3>
+                    <p id="csvPreviewStatus" class="csv-preview-status"></p>
+                    <div class="csv-preview-table-wrapper">
+                        <table id="csvPreviewTable" class="csv-preview-table">
+                            <thead>
+                                <tr>
+                                    <th>Status</th>
+                                    <th>Source</th>
+                                    <th>Destination</th>
+                                    <th>Packets</th>
+                                </tr>
+                            </thead>
+                            <tbody id="csvPreviewBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <footer class="modal__footer csv-modal-footer">
+                <button id="csvCancelBtn" class="ghost-btn" type="button">Cancel</button>
+                <button id="csvImportBtn" class="modal__action-btn" type="button" disabled>Import Routes</button>
+            </footer>
+        </div>
+    </div>
+
+    <script>
+        window.assetManifest = Object.assign(window.assetManifest || {}, {
+            dataMarker: "{{ url_for('serve_asset', filename='data.png') }}",
+            dataReceived: "{{ url_for('serve_asset', filename='data_recieved.png') }}",
+            dataReceiving: "{{ url_for('serve_asset', filename='recieving.png') }}",
+            dataSent: "{{ url_for('serve_asset', filename='data_sent.png') }}"
+        });
+    </script>
     <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
 </body>
 </html>

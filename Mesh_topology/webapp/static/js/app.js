@@ -43,10 +43,6 @@ const zoomInBtn = document.getElementById('zoomInBtn');
 const zoomOutBtn = document.getElementById('zoomOutBtn');
 const resetViewBtn = document.getElementById('resetViewBtn');
 const cursorModeBtn = document.getElementById('cursorModeBtn');
-const interfaceModeBtn = document.getElementById('interfaceModeBtn');
-const interfacePanel = document.getElementById('interfacePanel');
-const interfacePanelClose = document.getElementById('interfacePanelClose');
-const interfacePanelTitle = document.getElementById('interfacePanelTitle');
 const restartAnimationBtn = document.getElementById('restartAnimationBtn');
 const sidebarToggle = document.getElementById('sidebarToggle');
 const sidebarCloseBtn = document.getElementById('sidebarClose');
@@ -237,17 +233,6 @@ let currentDestinationId = null;
 let nodeOptionsCache = [];
 let suppressCandidateSelectChange = false;
 let speedMenuOpen = false;
-
-// Hover state for interface visualization
-let hoverState = {
-    nodeId: null,
-    startTime: null,
-    showInterfaces: false,
-};
-
-// Interface mode state
-let interfaceMode = false;
-let selectedInterfaceNode = null;
 
 if (animateBtn) {
     animateBtn.dataset.defaultLabel = animateBtn.textContent;
@@ -525,7 +510,7 @@ function getSimulationMode() {
 
 function isMultiSimulationMode() {
     const mode = getSimulationMode();
-    return mode === 'parallel';
+    return mode === 'parallel' || mode === 'allToOne';
 }
 
 function renderMultiDestinationList() {
@@ -3128,98 +3113,8 @@ function drawNodes(layout) {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
         ctx.fillText(nodeLabel(node), pos.x, pos.y + size/2 + 4);
-        
-        // Draw active interfaces on hover after 2 seconds
-        if (hoverState.showInterfaces && hoverState.nodeId === nodeId) {
-            drawActiveInterfaces(node, pos, size);
-        }
     });
     ctx.restore();
-}
-
-function drawActiveInterfaces(node, pos, nodeSize) {
-    if (!currentSimulation || !currentSimulation.nodeStates) return;
-    
-    const nodeId = makeNodeId(node);
-    const nodeState = currentSimulation.nodeStates.get(nodeId);
-    if (!nodeState) return;
-    
-    // Get node metadata to find interfaces
-    const meta = topologyData.nodes.find(n => makeNodeId(n) === nodeId);
-    if (!meta || !meta.neighbors) return;
-    
-    const interfaceSize = 12;
-    const offset = nodeSize/2 + 8;
-    
-    // Draw interfaces for each neighbor (N, E, S, W)
-    meta.neighbors.forEach((neighbor, idx) => {
-        const neighborId = makeNodeId(neighbor);
-        const interfaceState = nodeState.interfaces?.get(neighborId);
-        
-        // Only show active interfaces (not idle)
-        if (!interfaceState || 
-            (interfaceState.sendBuffer === 'idle' && 
-             interfaceState.receiveBuffer === 'idle' && 
-             interfaceState.handshake === 'idle')) {
-            return;
-        }
-        
-        // Determine direction based on neighbor position
-        let dx = neighbor.x - node.x;
-        let dy = neighbor.y - node.y;
-        let ifaceX = pos.x;
-        let ifaceY = pos.y;
-        
-        if (dx > 0) { // East
-            ifaceX = pos.x + offset;
-        } else if (dx < 0) { // West
-            ifaceX = pos.x - offset;
-        }
-        
-        if (dy > 0) { // South
-            ifaceY = pos.y + offset;
-        } else if (dy < 0) { // North
-            ifaceY = pos.y - offset;
-        }
-        
-        // Draw interface indicator
-        ctx.save();
-        
-        // Background
-        ctx.fillStyle = 'rgba(30, 41, 59, 0.95)';
-        ctx.fillRect(ifaceX - interfaceSize/2, ifaceY - interfaceSize/2, interfaceSize, interfaceSize);
-        
-        // Border based on state
-        let borderColor = colors.node;
-        if (interfaceState.sendBuffer === 'transferring' || 
-            interfaceState.receiveBuffer === 'receiving') {
-            borderColor = '#10b981'; // Green for active transfer
-        } else if (interfaceState.handshake === 'waiting' || 
-                   interfaceState.handshake === 'primed') {
-            borderColor = '#f59e0b'; // Orange for handshake
-        }
-        
-        ctx.strokeStyle = borderColor;
-        ctx.lineWidth = 2;
-        ctx.strokeRect(ifaceX - interfaceSize/2, ifaceY - interfaceSize/2, interfaceSize, interfaceSize);
-        
-        // Draw buffer state indicators (small colored dots)
-        const dotSize = 3;
-        if (interfaceState.sendBuffer !== 'idle') {
-            ctx.fillStyle = interfaceState.sendBuffer === 'transferring' ? '#10b981' : '#f59e0b';
-            ctx.beginPath();
-            ctx.arc(ifaceX - 3, ifaceY, dotSize/2, 0, Math.PI * 2);
-            ctx.fill();
-        }
-        if (interfaceState.receiveBuffer !== 'idle') {
-            ctx.fillStyle = interfaceState.receiveBuffer === 'receiving' ? '#10b981' : '#f59e0b';
-            ctx.beginPath();
-            ctx.arc(ifaceX + 3, ifaceY, dotSize/2, 0, Math.PI * 2);
-            ctx.fill();
-        }
-        
-        ctx.restore();
-    });
 }
 
 function meshGridPoint(fromNode, toNode, progress, layout) {
@@ -3633,9 +3528,6 @@ function renderTopology() {
             });
         }
     }
-    
-    // Update interface panel if visible
-    updateInterfacePanel();
 }
 
 // Replace the RouteAnimation class with this updated version
@@ -5169,27 +5061,31 @@ async function simulateParallelRoutes() {
     }
 
     const source = parseSelectValue(sourceSelect.value);
-    const destinations = collectSelectedDestinations();
-    const sourceKey = `${source.x}-${source.y}`;
-    const dedupe = new Map();
-    destinations.forEach((dest) => {
-        if (!dest || typeof dest.x !== 'number' || typeof dest.y !== 'number') {
-            return;
-        }
-        const key = `${dest.x}-${dest.y}`;
-        if (key === sourceKey) {
-            return;
-        }
-        if (!dedupe.has(key)) {
-            dedupe.set(key, dest);
-        }
-    });
+    if (!source || typeof source.x !== 'number' || typeof source.y !== 'number') {
+        hudStatus.textContent = 'Please select a valid source node for 1 → n parallel simulation.';
+        setStatusIdle('Awaiting source selection');
+        updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+        return;
+    }
 
-    const uniqueDestinations = Array.from(dedupe.values());
+    // Automatically collect all nodes except the source as destinations
+    const allDestinations = [];
+    const sourceKey = `${source.x}-${source.y}`;
+    
+    if (topologyData && Array.isArray(topologyData.nodes)) {
+        topologyData.nodes.forEach(node => {
+            const nodeKey = `${node.x}-${node.y}`;
+            if (nodeKey !== sourceKey) {
+                allDestinations.push({x: node.x, y: node.y});
+            }
+        });
+    }
+
+    const uniqueDestinations = allDestinations;
     const destinationTotal = uniqueDestinations.length;
     if (!destinationTotal) {
-        hudStatus.textContent = 'Add one or more destination nodes for 1 → n parallel simulation.';
-        setStatusIdle('Awaiting destination selection');
+        hudStatus.textContent = 'No destination nodes available for 1 → n parallel simulation.';
+        setStatusIdle('Awaiting topology');
         updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
         return;
     }
@@ -5391,6 +5287,252 @@ async function simulateParallelRoutes() {
         }
         sourceRuntime.lastUpdated = snapshotTimestamp;
         if (isNodePanelOpen() && selectedNodeId === sourceNodeId) {
+            updateNodePanelContent();
+        }
+
+    } catch (error) {
+        console.error(error);
+        const message = error.message || 'Routing failed';
+        hudStatus.textContent = message;
+        setStatusIdle(message);
+        updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+        setDetailedLog([]);
+        resetMultiRunState();
+        updateAnimationControlState();
+    }
+}
+
+async function simulateAllToOne() {
+    if (!topologyData) return;
+    setPickMode(null);
+    stopAnimation();
+    resetAllNodeRuntimeState();
+    resetMultiRunState();
+    syncSelectionState();
+    if (isMobileSidebar() && isSidebarVisible()) {
+        closeSidebar();
+    }
+
+    const destination = parseSelectValue(destinationSelect.value);
+    if (!destination || typeof destination.x !== 'number' || typeof destination.y !== 'number') {
+        hudStatus.textContent = 'Please select a valid destination node for n → 1 parallel simulation.';
+        setStatusIdle('Awaiting destination selection');
+        updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+        return;
+    }
+
+    // Automatically collect all nodes except the destination as sources
+    const allSources = [];
+    const destKey = `${destination.x}-${destination.y}`;
+    
+    if (topologyData && Array.isArray(topologyData.nodes)) {
+        topologyData.nodes.forEach(node => {
+            const nodeKey = `${node.x}-${node.y}`;
+            if (nodeKey !== destKey) {
+                allSources.push({x: node.x, y: node.y});
+            }
+        });
+    }
+
+    const uniqueSources = allSources;
+    const sourceTotal = uniqueSources.length;
+    if (!sourceTotal) {
+        hudStatus.textContent = 'No source nodes available for n → 1 parallel simulation.';
+        setStatusIdle('Awaiting topology');
+        updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+        return;
+    }
+
+    hudStatus.textContent = `Computing ${sourceTotal} parallel route(s) converging to single destination…`;
+
+    try {
+        const rawPayloads = await Promise.all(
+            uniqueSources.map((source) => fetchRoutePayload(source, destination))
+        );
+
+        if (!rawPayloads.length) {
+            hudStatus.textContent = 'No valid routes generated.';
+            setStatusIdle('Awaiting source selection');
+            updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
+            return;
+        }
+
+        const packetCount = rawPayloads.length;
+        const destinationNodeId = makeNodeId(destination);
+        
+        const enrichedPayloads = rawPayloads.map((payload, index) => {
+            const pathArray = Array.isArray(payload.path) ? payload.path : [];
+            const computedSource = pathArray.length ? pathArray[0] : payload.source || uniqueSources[index] || null;
+            const sourceAddress = computedSource
+                ? { x: computedSource.x, y: computedSource.y }
+                : { x: uniqueSources[index].x, y: uniqueSources[index].y };
+            return {
+                ...payload,
+                packetIndex: index + 1,
+                packetCount,
+                sourceAddress,
+                destinationAddress: destination,
+            };
+        });
+
+        const queueConfig = new Map();
+        const queueStats = new Map();
+        const routeQueueSummary = new Map();
+        let totalActive = 0;
+        let totalWaiting = 0;
+
+        enrichedPayloads.forEach((payload, index) => {
+            const pathArray = Array.isArray(payload.path) ? payload.path : [];
+            const source = pathArray[0] || payload.source || uniqueSources[index];
+            const neighborNode = pathArray.length > 1 ? pathArray[1] : null;
+            const sourceNodeId = makeNodeId(source);
+            const neighborId = neighborNode ? makeNodeId(neighborNode) : `${payload.packetIndex}`;
+            const queueKey = `${sourceNodeId}->${neighborId}`;
+            const capacity = resolveSendBufferCapacity(sourceNodeId, neighborNode);
+
+            if (!queueConfig.has(queueKey)) {
+                queueConfig.set(queueKey, {
+                    capacity,
+                    sourceId: sourceNodeId,
+                    sourceNode: source,
+                    neighborNode,
+                });
+            } else {
+                const config = queueConfig.get(queueKey);
+                config.capacity = capacity;
+            }
+
+            const stats = queueStats.get(queueKey) || { capacity, active: 0, waiting: 0 };
+            stats.capacity = capacity;
+            const slotAvailable = stats.active < Math.max(1, stats.capacity);
+            if (slotAvailable) {
+                stats.active += 1;
+                totalActive += 1;
+            } else {
+                stats.waiting += 1;
+                totalWaiting += 1;
+            }
+            queueStats.set(queueKey, stats);
+
+            payload.routeIndex = index;
+            payload.queueKey = queueKey;
+            payload.bufferCapacity = capacity;
+            payload.firstHopNode = neighborNode;
+            payload.firstHopId = neighborId;
+            payload.sourceNode = source;
+            payload.sourceNodeId = sourceNodeId;
+            payload.initialQueueState = slotAvailable ? 'active' : 'waiting';
+
+            routeQueueSummary.set(index, {
+                total: 1,
+                active: slotAvailable ? 1 : 0,
+                waiting: slotAvailable ? 0 : 1,
+                delivered: 0,
+            });
+        });
+
+        const previewRoutes = enrichedPayloads.map((payload, index) => {
+            const color = PARALLEL_ROUTE_COLORS[index % PARALLEL_ROUTE_COLORS.length];
+            return new RoutePreview(payload, {
+                renderStyle: 'pending',
+                treeColor: color,
+                ringColor: color,
+                strokeOpacity: 0.35,
+                lineWidth: 3,
+            });
+        });
+
+        multiRunState = {
+            mode: 'allToOne',
+            payloads: enrichedPayloads,
+            currentIndex: null,
+            selectedIndex: 0,
+            completed: new Set(),
+            completedRoutes: [],
+            completedStatuses: [],
+            previewRoutes,
+            destination,
+            queueConfig,
+            routeQueueSummary,
+            totalPackets: packetCount,
+        };
+
+        summary.textContent = `All-to-one parallel: ${packetCount} source(s) → 1 destination · Packets: ${packetCount}`;
+        renderMultiRouteList();
+
+        const flowEntries = enrichedPayloads.map((payload, index) => {
+            const pathArray = Array.isArray(payload.path) ? payload.path : [];
+            const source = pathArray[0] || payload.source || uniqueSources[index];
+            return {
+                phase: `Packet ${index + 1}`,
+                title: `${safeNodeLabel(source)} → ${safeNodeLabel(destination)}`,
+                details: [
+                    `Hop count: ${payload.hopCount ?? 0}`,
+                    `Segments: ${Array.isArray(payload.segments) ? payload.segments.length : 0}`,
+                ],
+            };
+        });
+        renderFlow(flowEntries);
+        setDetailedLog(
+            buildDetailedLogForParallelPayloads(enrichedPayloads, {
+                mode: 'allToOne',
+                queueConfig,
+                routeSummary: routeQueueSummary,
+            }),
+            {
+                title: `n → 1 log · ${sourceTotal} source${sourceTotal === 1 ? '' : 's'} → ${nodeLabel(destination)}`,
+            },
+        );
+
+        const firstPayload = enrichedPayloads[0];
+        if (firstPayload) {
+            const previewEntry = Array.isArray(multiRunState.previewRoutes)
+                ? multiRunState.previewRoutes[0]
+                : null;
+            const previewColors = previewEntry
+                ? {
+                    treeColor: previewEntry.treeColor,
+                    ringColor: previewEntry.ringColor,
+                    strokeOpacity: 0.85,
+                    lineWidth: 4,
+                }
+                : null;
+            prepareRoute(firstPayload, {
+                contextLabel: `Packet 1 of ${packetCount}`,
+                previewColors,
+                buttonLabel: 'Animate all',
+            });
+            lastRoutePayload = firstPayload;
+        }
+
+        hudStatus.textContent = `All-to-one parallel routes ready (${packetCount}). Press "Animate all" to see simultaneous transmission.`;
+        const hasSegments = enrichedPayloads.some((payload) => Array.isArray(payload.segments) && payload.segments.length);
+        updateAnimateButton({ disabled: !hasSegments, busy: false, label: 'Animate all' });
+
+        const snapshotTimestamp = performance.now();
+        queueConfig.forEach((config, key) => {
+            const stats = queueStats.get(key) || { active: 0, waiting: 0 };
+            const ifaceRuntime = ensureInterfaceRuntimeState(config.sourceId, config.neighborNode);
+            if (ifaceRuntime && ifaceRuntime.sendBuffer) {
+                ifaceRuntime.sendBuffer.capacity = config.capacity;
+                ifaceRuntime.sendBuffer.used = stats.active;
+                ifaceRuntime.sendBuffer.queue = stats.waiting;
+                ifaceRuntime.sendBuffer.state = stats.active > 0
+                    ? 'primed'
+                    : (stats.waiting > 0 ? 'primed' : 'idle');
+            }
+        });
+        
+        // Set runtime state for all source nodes
+        enrichedPayloads.forEach(payload => {
+            const sourceRuntime = ensureNodeRuntimeState(payload.sourceNodeId);
+            sourceRuntime.pendingOutbound = 1;
+            sourceRuntime.sendBuffer = 'primed';
+            sourceRuntime.handshake = 'primed';
+            sourceRuntime.lastUpdated = snapshotTimestamp;
+        });
+        
+        if (isNodePanelOpen()) {
             updateNodePanelContent();
         }
 
@@ -5758,7 +5900,7 @@ function prepareRoute(payload, options = {}) {
 function playAnimation() {
     if (
         multiRunState
-        && (multiRunState.mode === 'parallel' || multiRunState.mode === 'nm')
+        && (multiRunState.mode === 'parallel' || multiRunState.mode === 'allToOne' || multiRunState.mode === 'nm')
     ) {
         const payloadList = multiRunState.mode === 'nm'
             ? multiRunState.packetPayloads || []
@@ -5769,6 +5911,8 @@ function playAnimation() {
         }
         const completionMessage = multiRunState.mode === 'nm'
             ? 'n → m plan complete'
+            : multiRunState.mode === 'allToOne'
+            ? 'All-to-one parallel transmissions complete'
             : 'Parallel transmissions complete';
         startAnimation(payloadList[0], {
             parallelPayloads: payloadList,
@@ -5843,7 +5987,7 @@ function startAnimation(payload, options = {}) {
         if (!animationState) return;
         animationState.update(timestamp);
 
-        if (animationState.mode === 'parallel' || animationState.mode === 'nm') {
+        if (animationState.mode === 'parallel' || animationState.mode === 'allToOne' || animationState.mode === 'nm') {
             const activeEntries = typeof animationState.getActiveEntries === 'function'
                 ? animationState.getActiveEntries()
                 : Array.isArray(animationState.animations)
@@ -5884,7 +6028,7 @@ function startAnimation(payload, options = {}) {
 
         renderTopology();
 
-        const isComplete = animationState.mode === 'parallel'
+        const isComplete = animationState.mode === 'parallel' || animationState.mode === 'allToOne'
             ? animationState.isComplete()
             : animationState.isComplete();
 
@@ -5892,12 +6036,14 @@ function startAnimation(payload, options = {}) {
             const multiMode = multiRunState?.mode || null;
             const completionMessage = multiMode === 'nm'
                 ? 'n → m plan complete'
-                : animationState.mode === 'parallel'
-                    ? 'Parallel transmissions complete'
-                    : 'Transmission complete';
+                : multiMode === 'allToOne'
+                    ? 'All-to-one parallel transmissions complete'
+                    : animationState.mode === 'parallel'
+                        ? 'Parallel transmissions complete'
+                        : 'Transmission complete';
             const transferLabel = multiMode === 'nm'
                 ? 'Routes delivered'
-                : animationState.mode === 'parallel'
+                : (animationState.mode === 'parallel' || animationState.mode === 'allToOne')
                     ? 'Packets delivered'
                     : 'Packet delivered';
 
@@ -6093,33 +6239,6 @@ canvas.addEventListener('pointermove', (event) => {
         renderTopology();
         return;
     }
-    
-    // Handle hover for interface visualization
-    const nodeId = findNodeAtPosition(event.offsetX, event.offsetY);
-    
-    if (nodeId) {
-        if (hoverState.nodeId !== nodeId) {
-            // New node, reset timer
-            hoverState.nodeId = nodeId;
-            hoverState.startTime = Date.now();
-            hoverState.showInterfaces = false;
-        } else if (!hoverState.showInterfaces) {
-            // Same node, check if 2 seconds elapsed
-            const elapsed = Date.now() - hoverState.startTime;
-            if (elapsed >= 2000) {
-                hoverState.showInterfaces = true;
-                renderTopology();
-            }
-        }
-    } else {
-        // No node hovered, reset
-        if (hoverState.nodeId !== null || hoverState.showInterfaces) {
-            hoverState.nodeId = null;
-            hoverState.startTime = null;
-            hoverState.showInterfaces = false;
-            renderTopology();
-        }
-    }
 });
 
 function endPan(event) {
@@ -6139,11 +6258,6 @@ canvas.addEventListener('click', (event) => {
     }
     const nodeId = findNodeAtPosition(event.offsetX, event.offsetY);
     if (nodeId) {
-        // Interface mode takes priority
-        if (interfaceMode) {
-            drawNodeInterface(nodeId);
-            return;
-        }
         handleCanvasNodeClick(nodeId);
         return;
     }
@@ -6238,6 +6352,9 @@ function runSimulationByMode() {
     switch (mode) {
         case 'parallel':
             simulateParallelRoutes();
+            break;
+        case 'allToOne':
+            simulateAllToOne();
             break;
         case 'nm':
             simulateNmRoutes();
@@ -6475,15 +6592,16 @@ renderMultiDestinationList();
 function applySimulationModeUI(mode) {
     const normalizedMode = mode || (simulationModeSelect ? simulationModeSelect.value : 'single');
     const isParallel = normalizedMode === 'parallel';
+    const isAllToOne = normalizedMode === 'allToOne';
     const isNm = normalizedMode === 'nm';
 
     setPickMode(null);
 
     if (sourceField) {
-        setElementVisibility(sourceField, !isNm);
+        setElementVisibility(sourceField, !isNm && !isAllToOne);
     }
-    setElementVisibility(singleDestinationField, normalizedMode === 'single');
-    setElementVisibility(multiDestinationField, isParallel);
+    setElementVisibility(singleDestinationField, normalizedMode === 'single' || isAllToOne);
+    setElementVisibility(multiDestinationField, false); // Hide destination selection in parallel mode
     setElementVisibility(nmRouteField, isNm);
 
     if (multiRouteList) {
@@ -6503,6 +6621,18 @@ function applySimulationModeUI(mode) {
         }
         renderMultiDestinationList();
         syncSelectionState();
+    } else if (isAllToOne) {
+        currentSourceId = null;
+        if (destinationSelect) {
+            let fallback = destinationSelect.value;
+            if (!fallback && destinationSelect.options.length) {
+                fallback = destinationSelect.options[0].value;
+            }
+            if (fallback) {
+                setSelectValue(destinationSelect, fallback);
+            }
+        }
+        syncSelectionState();
     } else if (isNm) {
         currentSourceId = null;
         currentDestinationId = null;
@@ -6515,7 +6645,7 @@ function applySimulationModeUI(mode) {
         syncSelectionState();
     }
 
-    if (isParallel || isNm) {
+    if (isParallel || isAllToOne || isNm) {
         updateAnimateButton({ disabled: true, busy: false, label: 'Animate all' });
     } else {
         updateAnimateButton({ disabled: true, busy: false, label: animateBtn?.dataset?.defaultLabel });
@@ -6534,7 +6664,9 @@ if (simulationModeSelect) {
         resetSimulation();
         summary.textContent = '';
         if (simulationModeSelect.value === 'parallel') {
-            hudStatus.textContent = 'Parallel mode selected. Choose multiple destinations to animate together.';
+            hudStatus.textContent = '1 → n parallel mode: Select source node. Packets will be sent to all other nodes.';
+        } else if (simulationModeSelect.value === 'allToOne') {
+            hudStatus.textContent = 'n → 1 parallel mode: Select destination node. All other nodes will send packets simultaneously.';
         } else if (simulationModeSelect.value === 'nm') {
             hudStatus.textContent = 'n → m mode selected. Add rows to the route plan table to define transmissions.';
         } else {
@@ -6556,207 +6688,7 @@ updateAnimationControlState();
 
 setDetailedLog([]);
 
-// Check hover timer periodically to trigger interface display
-setInterval(() => {
-    if (hoverState.nodeId && !hoverState.showInterfaces && hoverState.startTime) {
-        const elapsed = Date.now() - hoverState.startTime;
-        if (elapsed >= 2000) {
-            hoverState.showInterfaces = true;
-            renderTopology();
-        }
-    }
-}, 100); // Check every 100ms
-
 fetchTopology()
     .then(() => {
         resizeCanvas();
     });
-
-// Interface Mode Functions
-function toggleInterfaceMode() {
-    interfaceMode = !interfaceMode;
-    console.log('Interface mode toggled:', interfaceMode);
-    
-    if (interfaceModeBtn) {
-        interfaceModeBtn.setAttribute('aria-pressed', interfaceMode ? 'true' : 'false');
-        interfaceModeBtn.classList.toggle('is-active', interfaceMode);
-        interfaceModeBtn.style.backgroundColor = interfaceMode ? '#3b82f6' : '';
-        interfaceModeBtn.style.color = interfaceMode ? '#ffffff' : '';
-    }
-    if (interfaceMode) {
-        if (hudStatus) {
-            hudStatus.textContent = 'Interface mode: Click any node to view its interface';
-        }
-    } else {
-        if (hudStatus) {
-            hudStatus.textContent = 'Interface mode disabled';
-        }
-        // Close interface panel when mode is disabled
-        if (interfacePanel) {
-            interfacePanel.classList.remove('is-visible');
-        }
-    }
-}
-
-function drawNodeInterface(nodeId) {
-    const meta = nodeMeta.get(nodeId);
-    if (!meta) {
-        console.log('Node metadata not found for:', nodeId);
-        return;
-    }
-    
-    const node = topologyData.nodes.find(n => makeNodeId(n) === nodeId);
-    if (!node) {
-        console.log('Node not found in topology:', nodeId);
-        return;
-    }
-    
-    selectedInterfaceNode = nodeId;
-    
-    console.log('Opening interface panel for node:', nodeId, 'Node coords:', node.x, node.y);
-    
-    // Update panel title
-    if (interfacePanelTitle) {
-        interfacePanelTitle.textContent = `Node (${node.x}, ${node.y}) Interface`;
-    }
-    
-    // Get runtime state
-    const runtimeState = nodeRuntimeState.get(nodeId);
-    console.log('Runtime state:', runtimeState);
-    
-    // Update signal indicators
-    updateSignalIndicator('interfaceReq', runtimeState?.signals?.req || false);
-    updateSignalIndicator('interfaceAck', runtimeState?.signals?.ack || false);
-    updateSignalIndicator('interfaceData', runtimeState?.signals?.data || false);
-    
-    // Update send buffers
-    for (let i = 0; i < 4; i++) {
-        const bufferId = `sendBuffer${i}`;
-        const buffer = runtimeState?.sendBuffers?.[i];
-        updateBufferSlot(bufferId, buffer);
-    }
-    
-    // Update receive buffers
-    for (let i = 0; i < 4; i++) {
-        const bufferId = `recvBuffer${i}`;
-        const buffer = runtimeState?.receiveBuffers?.[i];
-        updateBufferSlot(bufferId, buffer);
-    }
-    
-    // Update active interface direction
-    const directionDisplay = document.getElementById('interfaceDirection');
-    if (directionDisplay && runtimeState?.activeInterface) {
-        directionDisplay.textContent = runtimeState.activeInterface;
-        directionDisplay.parentElement.setAttribute('data-active', 'true');
-    } else if (directionDisplay) {
-        directionDisplay.textContent = 'None';
-        directionDisplay.parentElement.setAttribute('data-active', 'false');
-    }
-    
-    // Show panel
-    if (interfacePanel) {
-        console.log('Adding is-visible class to panel');
-        interfacePanel.classList.add('is-visible');
-    } else {
-        console.error('Interface panel element not found!');
-    }
-}
-
-function updateSignalIndicator(elementId, isActive) {
-    const element = document.getElementById(elementId);
-    if (!element) return;
-    
-    element.setAttribute('data-active', isActive ? 'true' : 'false');
-    const valueSpan = element.querySelector('.signal-status__value');
-    if (valueSpan) {
-        valueSpan.textContent = isActive ? 'HIGH' : 'LOW';
-    }
-}
-
-function updateBufferSlot(bufferId, bufferData) {
-    const slotElement = document.getElementById(bufferId);
-    if (!slotElement) return;
-    
-    const contentElement = slotElement.querySelector('.buffer-slot__content');
-    if (!contentElement) return;
-    
-    if (!bufferData || bufferData.state === 'empty') {
-        slotElement.setAttribute('data-state', 'empty');
-        contentElement.textContent = '—';
-    } else if (bufferData.state === 'active') {
-        slotElement.setAttribute('data-state', 'active');
-        contentElement.textContent = bufferData.packet ? 
-            `P${bufferData.packet.id} → (${bufferData.packet.dest.x},${bufferData.packet.dest.y})` : 
-            'Active';
-    } else if (bufferData.state === 'filled') {
-        slotElement.setAttribute('data-state', 'filled');
-        contentElement.textContent = bufferData.packet ? 
-            `P${bufferData.packet.id} → (${bufferData.packet.dest.x},${bufferData.packet.dest.y})` : 
-            'Filled';
-    }
-}
-
-// Update interface panel during simulation
-function updateInterfacePanel() {
-    if (!interfacePanel || !interfacePanel.classList.contains('is-visible')) {
-        return;
-    }
-    
-    if (!selectedInterfaceNode) {
-        return;
-    }
-    
-    const runtimeState = nodeRuntimeState.get(selectedInterfaceNode);
-    if (!runtimeState) return;
-    
-    // Update signals
-    updateSignalIndicator('interfaceReq', runtimeState.signals?.req || false);
-    updateSignalIndicator('interfaceAck', runtimeState.signals?.ack || false);
-    updateSignalIndicator('interfaceData', runtimeState.signals?.data || false);
-    
-    // Update send buffers
-    for (let i = 0; i < 4; i++) {
-        const bufferId = `sendBuffer${i}`;
-        const buffer = runtimeState.sendBuffers?.[i];
-        updateBufferSlot(bufferId, buffer);
-    }
-    
-    // Update receive buffers
-    for (let i = 0; i < 4; i++) {
-        const bufferId = `recvBuffer${i}`;
-        const buffer = runtimeState.receiveBuffers?.[i];
-        updateBufferSlot(bufferId, buffer);
-    }
-    
-    // Update active interface
-    const directionDisplay = document.getElementById('interfaceDirection');
-    if (directionDisplay && runtimeState.activeInterface) {
-        directionDisplay.textContent = runtimeState.activeInterface;
-        directionDisplay.parentElement.setAttribute('data-active', 'true');
-    } else if (directionDisplay) {
-        directionDisplay.textContent = 'None';
-        directionDisplay.parentElement.setAttribute('data-active', 'false');
-    }
-}
-
-// Event listeners for interface mode
-console.log('Setting up interface mode listeners...');
-console.log('interfaceModeBtn:', interfaceModeBtn);
-console.log('interfacePanel:', interfacePanel);
-console.log('interfacePanelClose:', interfacePanelClose);
-
-if (interfaceModeBtn) {
-    interfaceModeBtn.addEventListener('click', toggleInterfaceMode);
-    console.log('Interface mode button listener added');
-}
-
-if (interfacePanelClose) {
-    interfacePanelClose.addEventListener('click', () => {
-        console.log('Close button clicked');
-        if (interfacePanel) {
-            interfacePanel.classList.remove('is-visible');
-        }
-    });
-    console.log('Interface panel close listener added');
-}
-
