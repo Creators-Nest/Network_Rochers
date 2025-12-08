@@ -3331,31 +3331,52 @@ function drawMeshGrid(layout) {
 function drawMeshEdges(layout) {
     if (!topologyData) return;
     ctx.save();
-    ctx.strokeStyle = colors.tree;
-    ctx.lineWidth = 1.5;
     
-    // Draw horizontal edges
-    if (Array.isArray(topologyData.horizontalEdges)) {
-        topologyData.horizontalEdges.forEach(({ source, target }) => {
-            const start = getNodePosition(source.x, source.y, layout);
-            const end = getNodePosition(target.x, target.y, layout);
+    // Draw regular edges and wraparound edges separately
+    if (Array.isArray(topologyData.edges)) {
+        // First pass: draw regular edges
+        ctx.strokeStyle = colors.tree;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([]);
+        
+        topologyData.edges.forEach((edge) => {
+            if (edge.is_wraparound) return; // Skip wraparound edges in first pass
+            
+            const start = getNodePosition(edge.from[0], edge.from[1], layout);
+            const end = getNodePosition(edge.to[0], edge.to[1], layout);
             ctx.beginPath();
             ctx.moveTo(start.x, start.y);
             ctx.lineTo(end.x, end.y);
             ctx.stroke();
         });
-    }
-    
-    // Draw vertical edges
-    if (Array.isArray(topologyData.verticalEdges)) {
-        topologyData.verticalEdges.forEach(({ source, target }) => {
-            const start = getNodePosition(source.x, source.y, layout);
-            const end = getNodePosition(target.x, target.y, layout);
+        
+        // Second pass: draw wraparound edges with distinct style and offset
+        ctx.strokeStyle = '#0ea5e9'; // Cyan color for wraparound
+        ctx.lineWidth = 2;
+        ctx.setLineDash([8, 4]); // Dashed line pattern
+        ctx.globalAlpha = 0.6;
+        
+        topologyData.edges.forEach((edge) => {
+            if (!edge.is_wraparound) return; // Only draw wraparound edges
+            
+            const start = getNodePosition(edge.from[0], edge.from[1], layout);
+            const end = getNodePosition(edge.to[0], edge.to[1], layout);
+            
+            // Calculate perpendicular offset to avoid overlap
+            const dx = end.x - start.x;
+            const dy = end.y - start.y;
+            const length = Math.sqrt(dx * dx + dy * dy);
+            const offsetAmount = 8; // Pixels to offset
+            
+            // Perpendicular vector (rotate 90 degrees)
+            const perpX = -dy / length * offsetAmount;
+            const perpY = dx / length * offsetAmount;
+            
             ctx.beginPath();
-            ctx.moveTo(start.x, start.y);
-            ctx.lineTo(end.x, end.y);
+            ctx.moveTo(start.x + perpX, start.y + perpY);
+            ctx.lineTo(end.x + perpX, end.y + perpY);
             ctx.stroke();
-        });
+        })
     }
     
     ctx.restore();
@@ -3609,9 +3630,27 @@ function drawRoute(state, layout, options = {}) {
         const from = segment.from;
         const to = segment.to;
 
+        // Check if this is a wraparound segment
+        const dx_check = Math.abs(to.x - from.x);
+        const dy_check = Math.abs(to.y - from.y);
+        const isWraparound = dx_check > 1 || dy_check > 1;
+
         // For mesh, we draw straight lines (either horizontal or vertical)
-        const startPos = getNodePosition(from.x, from.y, layout);
-        const endPos = getNodePosition(to.x, to.y, layout);
+        let startPos = getNodePosition(from.x, from.y, layout);
+        let endPos = getNodePosition(to.x, to.y, layout);
+        
+        // Apply offset for wraparound segments
+        if (isWraparound) {
+            const dx = endPos.x - startPos.x;
+            const dy = endPos.y - startPos.y;
+            const length = Math.sqrt(dx * dx + dy * dy);
+            const offsetAmount = 8;
+            const perpX = -dy / length * offsetAmount;
+            const perpY = dx / length * offsetAmount;
+            startPos = { x: startPos.x + perpX, y: startPos.y + perpY };
+            endPos = { x: endPos.x + perpX, y: endPos.y + perpY };
+        }
+        
         ctx.beginPath();
         ctx.strokeStyle = activeTreeColor;
         const midX = startPos.x + (endPos.x - startPos.x) * clamp(completion, 0, 1);
@@ -3664,8 +3703,25 @@ function segmentPointWithAngle(segment, progress, layout, { reverse = false, all
     // For mesh, all segments are straight lines
     const fromNode = reverse ? segment.to : segment.from;
     const toNode = reverse ? segment.from : segment.to;
-    const fromPos = getNodePosition(fromNode.x, fromNode.y, layout);
-    const toPos = getNodePosition(toNode.x, toNode.y, layout);
+    let fromPos = getNodePosition(fromNode.x, fromNode.y, layout);
+    let toPos = getNodePosition(toNode.x, toNode.y, layout);
+    
+    // Check if this is a wraparound segment and apply offset
+    const dx_check = Math.abs(toNode.x - fromNode.x);
+    const dy_check = Math.abs(toNode.y - fromNode.y);
+    const isWraparound = dx_check > 1 || dy_check > 1;
+    
+    if (isWraparound) {
+        const dx = toPos.x - fromPos.x;
+        const dy = toPos.y - fromPos.y;
+        const length = Math.sqrt(dx * dx + dy * dy);
+        const offsetAmount = 8;
+        const perpX = -dy / length * offsetAmount;
+        const perpY = dx / length * offsetAmount;
+        fromPos = { x: fromPos.x + perpX, y: fromPos.y + perpY };
+        toPos = { x: toPos.x + perpX, y: toPos.y + perpY };
+    }
+    
     const x = fromPos.x + (toPos.x - fromPos.x) * clamp(clampedProgress, 0, 1);
     const y = fromPos.y + (toPos.y - fromPos.y) * clamp(clampedProgress, 0, 1);
     const angle = Math.atan2(toPos.y - fromPos.y, toPos.x - fromPos.x);
