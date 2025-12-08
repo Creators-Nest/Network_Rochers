@@ -42,22 +42,34 @@ const COLORS = {
 
 // Initialize on page load
 window.addEventListener('load', () => {
-    canvas = document.getElementById('topology-canvas');
-    ctx = canvas.getContext('2d');
+    canvas = document.getElementById('networkCanvas');
+    if (!canvas) {
+        canvas = document.getElementById('topology-canvas');
+    }
     
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
+    if (canvas) {
+        ctx = canvas.getContext('2d');
+        
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        
+        // Setup canvas event listeners
+        canvas.addEventListener('mousedown', handleMouseDown);
+        canvas.addEventListener('mousemove', handleMouseMove);
+        canvas.addEventListener('mouseup', handleMouseUp);
+        canvas.addEventListener('wheel', handleWheel);
+        canvas.addEventListener('click', handleCanvasClick);
+    }
     
-    // Setup canvas event listeners
-    canvas.addEventListener('mousedown', handleMouseDown);
-    canvas.addEventListener('mousemove', handleMouseMove);
-    canvas.addEventListener('mouseup', handleMouseUp);
-    canvas.addEventListener('wheel', handleWheel);
-    canvas.addEventListener('click', handleCanvasClick);
-    
-    // Setup transfer type listeners
-    document.getElementById('transfer1to1').addEventListener('change', handleTransferTypeChange);
-    document.getElementById('transfer1toM').addEventListener('change', handleTransferTypeChange);
+    // Setup transfer type listeners if they exist
+    const transfer1to1 = document.getElementById('transfer1to1');
+    const transfer1toM = document.getElementById('transfer1toM');
+    if (transfer1to1) {
+        transfer1to1.addEventListener('change', handleTransferTypeChange);
+    }
+    if (transfer1toM) {
+        transfer1toM.addEventListener('change', handleTransferTypeChange);
+    }
     
     // Initialize default topology
     initTopology();
@@ -75,13 +87,19 @@ function resizeCanvas() {
 // =========================
 
 async function initTopology() {
-    const width = parseInt(document.getElementById('gridWidth').value);
-    const height = parseInt(document.getElementById('gridHeight').value);
+    const widthInput = document.getElementById('widthInput') || document.getElementById('gridWidth');
+    const heightInput = document.getElementById('heightInput') || document.getElementById('gridHeight');
     
-    showLoading(true);
+    const width = parseInt(widthInput?.value || '4');
+    const height = parseInt(heightInput?.value || '4');
+    
+    const loadingOverlay = document.getElementById('loadingOverlay');
+    if (loadingOverlay) {
+        showLoading(true);
+    }
     
     try {
-        const response = await fetch('/api/init', {
+        const response = await fetch('/api/topology', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ width, height })
@@ -89,19 +107,21 @@ async function initTopology() {
         
         const data = await response.json();
         
-        if (data.status === 'success') {
-            topology = data.topology_data;
+        if (data.status === 'success' || data.nodes) {
+            topology = data.topology_data || data;
             resetSelection();
             drawTopology();
             updateStats();
         } else {
-            alert('Error: ' + data.message);
+            alert('Error: ' + (data.message || 'Failed to initialize topology'));
         }
     } catch (error) {
         console.error('Error initializing topology:', error);
         alert('Failed to initialize topology');
     } finally {
-        showLoading(false);
+        if (loadingOverlay) {
+            showLoading(false);
+        }
     }
 }
 
@@ -219,8 +239,9 @@ function handleCanvasClick(e) {
         if (mouseX >= pos.x - halfSize && mouseX <= pos.x + halfSize &&
             mouseY >= pos.y - halfSize && mouseY <= pos.y + halfSize) {
             handleNodeClick(node.address);
-            // Also update internal view
+            // Also update internal view and node details panel
             showNodeInternal(node.address);
+            showNodeDetailsPanel(node.address);
             return;
         }
     }
@@ -695,7 +716,10 @@ function closeLiveResults() {
 function updateStats() {
     if (!topology) return;
     
-    document.getElementById('statNodes').textContent = topology.nodes.length;
+    const statNodes = document.getElementById('statNodes');
+    if (statNodes) {
+        statNodes.textContent = topology.nodes ? topology.nodes.length : 0;
+    }
     // Other stats would be updated based on simulation results
 }
 
@@ -757,7 +781,10 @@ function resetZoom() {
 // =========================
 
 function showLoading(show) {
-    document.getElementById('loadingOverlay').style.display = show ? 'flex' : 'none';
+    const loadingOverlay = document.getElementById('loadingOverlay');
+    if (loadingOverlay) {
+        loadingOverlay.style.display = show ? 'flex' : 'none';
+    }
 }
 
 function delay(ms) {
@@ -779,19 +806,26 @@ function showNodeInternal(address) {
     const nodeInternal = document.getElementById('nodeInternal');
     const title = document.getElementById('nodeInternalTitle');
     
-    title.textContent = `Node (${address[0]},${address[1]}) Internal View`;
-    nodeInternal.classList.add('active');
-    
-    // Clear any existing interval
-    if (internalViewUpdateInterval) {
-        clearInterval(internalViewUpdateInterval);
+    if (title) {
+        title.textContent = `Node (${address[0]},${address[1]}) Internal View`;
     }
     
-    // Update immediately
-    updateNodeInternal();
-    
-    // Update every 500ms while displayed
-    internalViewUpdateInterval = setInterval(updateNodeInternal, 500);
+    if (nodeInternal) {
+        nodeInternal.classList.add('active');
+        
+        // Clear any existing interval
+        if (internalViewUpdateInterval) {
+            clearInterval(internalViewUpdateInterval);
+        }
+        
+        // Update immediately
+        updateNodeInternal();
+        
+        // Update every 500ms while displayed
+        internalViewUpdateInterval = setInterval(updateNodeInternal, 500);
+    } else {
+        console.warn('Node internal view element not found. Make sure the HTML template includes the nodeInternal div.');
+    }
 }
 
 function updateNodeInternal() {
@@ -827,73 +861,473 @@ function updateInternalViewUI(nodeState) {
     const pins = ['req', 'ack', 'data', 'clk', 'choke'];
     pins.forEach(pin => {
         const pinEl = document.getElementById(`pin-${pin}`);
-        const isActive = nodeState.pins && nodeState.pins[pin];
-        pinEl.className = `pin ${isActive ? 'active' : 'inactive'}`;
+        if (pinEl) {
+            const isActive = nodeState.pins && nodeState.pins[pin];
+            pinEl.className = `pin ${isActive ? 'active' : 'inactive'}`;
+        }
     });
     
-    // Update Registers
+    // Update Registers - check for interface-specific data first
     const sendReg = document.getElementById('send-register');
     const receiveReg = document.getElementById('receive-register');
     
-    if (nodeState.send_register && nodeState.send_register.packet_id !== null) {
-        sendReg.textContent = `Send: Packet ${nodeState.send_register.packet_id}`;
-        sendReg.style.background = '#c3dafe';
-    } else {
-        sendReg.textContent = 'Send Register: Empty';
-        sendReg.style.background = 'white';
+    if (sendReg) {
+        // Check if any interface has data in send register
+        let hasSendData = false;
+        let sendPacketInfo = '';
+        
+        if (nodeState.interfaces) {
+            for (const [direction, interfaceData] of Object.entries(nodeState.interfaces)) {
+                if (interfaceData.send_register && interfaceData.send_register.packet_id !== null) {
+                    hasSendData = true;
+                    sendPacketInfo = `Send (${direction}): Packet ${interfaceData.send_register.packet_id}`;
+                    break;
+                }
+            }
+        }
+        
+        if (hasSendData) {
+            sendReg.textContent = sendPacketInfo;
+            sendReg.style.background = '#c3dafe';
+        } else {
+            sendReg.textContent = 'Send Register: Empty';
+            sendReg.style.background = 'white';
+        }
     }
     
-    if (nodeState.receive_register && nodeState.receive_register.packet_id !== null) {
-        receiveReg.textContent = `Receive: Packet ${nodeState.receive_register.packet_id}`;
-        receiveReg.style.background = '#c3dafe';
-    } else {
-        receiveReg.textContent = 'Receive Register: Empty';
-        receiveReg.style.background = 'white';
+    if (receiveReg) {
+        // Check if any interface has data in receive register
+        let hasReceiveData = false;
+        let receivePacketInfo = '';
+        
+        if (nodeState.interfaces) {
+            for (const [direction, interfaceData] of Object.entries(nodeState.interfaces)) {
+                if (interfaceData.receive_register && interfaceData.receive_register.packet_id !== null) {
+                    hasReceiveData = true;
+                    receivePacketInfo = `Receive (${direction}): Packet ${interfaceData.receive_register.packet_id}`;
+                    break;
+                }
+            }
+        }
+        
+        if (hasReceiveData) {
+            receiveReg.textContent = receivePacketInfo;
+            receiveReg.style.background = '#c3dafe';
+        } else {
+            receiveReg.textContent = 'Receive Register: Empty';
+            receiveReg.style.background = 'white';
+        }
     }
     
-    // Update Buffers
+    // Update Buffers - use aggregate data
     const sendBufferCount = nodeState.send_buffer ? nodeState.send_buffer.count : 0;
     const receiveBufferCount = nodeState.receive_buffer ? nodeState.receive_buffer.count : 0;
     const bufferCapacity = nodeState.send_buffer ? nodeState.send_buffer.capacity : 4;
     
-    document.getElementById('send-buffer-count').textContent = `${sendBufferCount}/${bufferCapacity}`;
-    document.getElementById('receive-buffer-count').textContent = `${receiveBufferCount}/${bufferCapacity}`;
+    const sendBufferCountEl = document.getElementById('send-buffer-count');
+    const receiveBufferCountEl = document.getElementById('receive-buffer-count');
+    
+    if (sendBufferCountEl) {
+        sendBufferCountEl.textContent = `${sendBufferCount}/${bufferCapacity}`;
+    }
+    if (receiveBufferCountEl) {
+        receiveBufferCountEl.textContent = `${receiveBufferCount}/${bufferCapacity}`;
+    }
     
     // Visual buffer fill
     const sendBufferVis = document.getElementById('send-buffer-vis');
     const receiveBufferVis = document.getElementById('receive-buffer-vis');
     
-    if (sendBufferCount > 0) {
-        sendBufferVis.classList.add('filled');
-        sendBufferVis.style.opacity = (sendBufferCount / bufferCapacity);
-    } else {
-        sendBufferVis.classList.remove('filled');
+    if (sendBufferVis) {
+        if (sendBufferCount > 0) {
+            sendBufferVis.classList.add('filled');
+            sendBufferVis.style.opacity = (sendBufferCount / bufferCapacity);
+        } else {
+            sendBufferVis.classList.remove('filled');
+        }
     }
     
-    if (receiveBufferCount > 0) {
-        receiveBufferVis.classList.add('filled');
-        receiveBufferVis.style.opacity = (receiveBufferCount / bufferCapacity);
-    } else {
-        receiveBufferVis.classList.remove('filled');
+    if (receiveBufferVis) {
+        if (receiveBufferCount > 0) {
+            receiveBufferVis.classList.add('filled');
+            receiveBufferVis.style.opacity = (receiveBufferCount / bufferCapacity);
+        } else {
+            receiveBufferVis.classList.remove('filled');
+        }
     }
     
-    // Update Status Bits
+    // Update Status Bits - check interface-specific status
     const receiveBit = document.getElementById('bit-receive');
     const transferBit = document.getElementById('bit-transfer');
     const busyBit = document.getElementById('bit-busy');
     
-    receiveBit.className = `indicator ${nodeState.receive_bit ? 'on' : 'off'}`;
-    transferBit.className = `indicator ${nodeState.transfer_bit ? 'on' : 'off'}`;
-    busyBit.className = `indicator ${nodeState.busy_bit ? 'on' : 'off'}`;
+    let isReceiving = false;
+    let isTransferring = false;
+    let isBusy = false;
+    
+    if (nodeState.interfaces) {
+        for (const [direction, interfaceData] of Object.entries(nodeState.interfaces)) {
+            if (interfaceData.status_bits) {
+                isReceiving = isReceiving || interfaceData.status_bits.receive;
+                isTransferring = isTransferring || interfaceData.status_bits.transfer;
+                isBusy = isBusy || interfaceData.status_bits.busy;
+            }
+        }
+    }
+    
+    if (receiveBit) {
+        receiveBit.className = `indicator ${isReceiving ? 'on' : 'off'}`;
+    }
+    if (transferBit) {
+        transferBit.className = `indicator ${isTransferring ? 'on' : 'off'}`;
+    }
+    if (busyBit) {
+        busyBit.className = `indicator ${isBusy ? 'on' : 'off'}`;
+    }
+    
+    // Update interface-specific displays if they exist
+    updateInterfaceSpecificDisplays(nodeState);
+}
+
+function updateInterfaceSpecificDisplays(nodeState) {
+    // Update individual interface displays (North, South, East, West)
+    const directions = ['north', 'south', 'east', 'west'];
+    
+    directions.forEach(direction => {
+        const interfaceData = nodeState.interfaces && nodeState.interfaces[direction];
+        
+        // Update pins for this direction
+        const pins = ['req', 'ack', 'data', 'clk', 'choke'];
+        pins.forEach(pin => {
+            const pinEl = document.getElementById(`${direction}-pin-${pin}`);
+            if (pinEl && interfaceData) {
+                const isActive = interfaceData.pins && interfaceData.pins[pin];
+                pinEl.className = `pin ${isActive ? 'active' : 'inactive'}`;
+            }
+        });
+        
+        // Update buffer counts for this direction
+        const sendCountEl = document.getElementById(`${direction}-send-count`);
+        const receiveCountEl = document.getElementById(`${direction}-receive-count`);
+        
+        if (sendCountEl && interfaceData) {
+            const sendCount = interfaceData.send_buffer ? interfaceData.send_buffer.count : 0;
+            const capacity = interfaceData.send_buffer ? interfaceData.send_buffer.capacity : 4;
+            sendCountEl.textContent = `${sendCount}/${capacity}`;
+        }
+        
+        if (receiveCountEl && interfaceData) {
+            const receiveCount = interfaceData.receive_buffer ? interfaceData.receive_buffer.count : 0;
+            const capacity = interfaceData.receive_buffer ? interfaceData.receive_buffer.capacity : 4;
+            receiveCountEl.textContent = `${receiveCount}/${capacity}`;
+        }
+    });
 }
 
 function hideNodeInternal() {
     const nodeInternal = document.getElementById('nodeInternal');
-    nodeInternal.classList.remove('active');
+    if (nodeInternal) {
+        nodeInternal.classList.remove('active');
+    }
     selectedNodeForInternal = null;
     
     if (internalViewUpdateInterval) {
         clearInterval(internalViewUpdateInterval);
         internalViewUpdateInterval = null;
+    }
+}
+
+// =========================
+// Node Details Panel Functions
+// =========================
+
+let selectedNodeId = null;
+let nodePanelAutoTracking = false;
+let autoNodeDetailsPreference = false;
+
+function showNodeDetailsPanel(address) {
+    const nodeId = `${address[0]}-${address[1]}`;
+    selectedNodeId = nodeId;
+    
+    // Get node panel elements
+    const nodePanel = document.getElementById('nodeDetailsPanel');
+    const nodePanelTitle = document.getElementById('nodePanelTitle');
+    const nodePanelSubhead = document.getElementById('nodePanelSubhead');
+    const nodePanelPosition = document.getElementById('nodePanelPosition');
+    const nodePanelDegree = document.getElementById('nodePanelDegree');
+    const nodePanelRoutes = document.getElementById('nodePanelRoutes');
+    const nodePanelNeighbors = document.getElementById('nodePanelNeighbors');
+    const nodePanelInterfaces = document.getElementById('nodePanelInterfaces');
+    const nodePanelSendBuffer = document.getElementById('nodePanelSendBuffer');
+    const nodePanelReceiveBuffer = document.getElementById('nodePanelReceiveBuffer');
+    const nodePanelAppBuffer = document.getElementById('nodePanelAppBuffer');
+    const nodePanelHandshake = document.getElementById('nodePanelHandshake');
+    
+    if (!nodePanel) return;
+    
+    // Find the node in topology
+    const node = topology.nodes.find(n => n.address[0] === address[0] && n.address[1] === address[1]);
+    if (!node) return;
+    
+    // Update panel content
+    if (nodePanelTitle) {
+        nodePanelTitle.textContent = `(${address[0]}, ${address[1]})`;
+    }
+    if (nodePanelSubhead) {
+        nodePanelSubhead.textContent = `Torus node at position (${address[0]}, ${address[1]}) with wraparound connections`;
+    }
+    if (nodePanelPosition) {
+        nodePanelPosition.textContent = `(${address[0]}, ${address[1]})`;
+    }
+    if (nodePanelDegree) {
+        nodePanelDegree.textContent = node.num_interfaces || '4';
+    }
+    if (nodePanelRoutes) {
+        nodePanelRoutes.textContent = node.routing_table_size || '0';
+    }
+    
+    // Update neighbors list with wraparound indication
+    if (nodePanelNeighbors) {
+        nodePanelNeighbors.innerHTML = '';
+        
+        const neighbors = getTorusNeighbors(address[0], address[1]);
+        neighbors.forEach(neighbor => {
+            const item = document.createElement('li');
+            const label = document.createElement('span');
+            
+            const wrapText = neighbor.isWraparound ? ' 🔄' : '';
+            label.textContent = `(${neighbor.address[0]}, ${neighbor.address[1]})${wrapText}`;
+            
+            const type = document.createElement('span');
+            const wrapLabel = neighbor.isWraparound ? ' · Wraparound' : '';
+            type.textContent = `${neighbor.direction.toUpperCase()} · Capacity: 4${wrapLabel}`;
+            
+            item.appendChild(label);
+            item.appendChild(type);
+            nodePanelNeighbors.appendChild(item);
+        });
+    }
+    
+    // Update interface details section
+    if (nodePanelInterfaces) {
+        nodePanelInterfaces.innerHTML = '';
+        
+        const neighbors = getTorusNeighbors(address[0], address[1]);
+        neighbors.forEach(neighbor => {
+            const interfaceCard = createInterfaceCard(neighbor, address);
+            nodePanelInterfaces.appendChild(interfaceCard);
+        });
+    }
+    
+    // Update buffer states
+    updateBufferChip(nodePanelSendBuffer, 'idle', 'Idle');
+    updateBufferChip(nodePanelReceiveBuffer, 'idle', 'Idle');
+    updateBufferChip(nodePanelAppBuffer, 'idle', '0 packets');
+    updateBufferChip(nodePanelHandshake, 'idle', 'Idle');
+    
+    // Show the panel
+    nodePanel.classList.add('is-visible');
+    nodePanel.setAttribute('aria-hidden', 'false');
+    
+    const nodePanelScrim = document.getElementById('nodePanelScrim');
+    if (nodePanelScrim) {
+        nodePanelScrim.classList.add('is-active');
+        nodePanelScrim.setAttribute('aria-hidden', 'false');
+    }
+    document.body.classList.add('node-panel-open');
+}
+
+function closeNodeDetailsPanel() {
+    const nodePanel = document.getElementById('nodeDetailsPanel');
+    const nodePanelScrim = document.getElementById('nodePanelScrim');
+    
+    if (nodePanel) {
+        nodePanel.classList.remove('is-visible');
+        nodePanel.setAttribute('aria-hidden', 'true');
+    }
+    if (nodePanelScrim) {
+        nodePanelScrim.classList.remove('is-active');
+        nodePanelScrim.setAttribute('aria-hidden', 'true');
+    }
+    document.body.classList.remove('node-panel-open');
+    selectedNodeId = null;
+}
+
+function getTorusNeighbors(x, y) {
+    if (!topology) return [];
+    
+    const width = topology.width;
+    const height = topology.height;
+    const neighbors = [];
+    
+    // North neighbor (with wraparound)
+    const northY = (y - 1 + height) % height;
+    neighbors.push({
+        address: [x, northY],
+        direction: 'north',
+        isWraparound: y === 0
+    });
+    
+    // South neighbor (with wraparound)
+    const southY = (y + 1) % height;
+    neighbors.push({
+        address: [x, southY],
+        direction: 'south',
+        isWraparound: y === height - 1
+    });
+    
+    // East neighbor (with wraparound)
+    const eastX = (x + 1) % width;
+    neighbors.push({
+        address: [eastX, y],
+        direction: 'east',
+        isWraparound: x === width - 1
+    });
+    
+    // West neighbor (with wraparound)
+    const westX = (x - 1 + width) % width;
+    neighbors.push({
+        address: [westX, y],
+        direction: 'west',
+        isWraparound: x === 0
+    });
+    
+    return neighbors;
+}
+
+function isWraparoundConnection(nodeAddr, neighborAddr) {
+    if (!topology) return false;
+    
+    const width = topology.width;
+    const height = topology.height;
+    
+    // Check horizontal wraparound
+    if (nodeAddr[1] === neighborAddr[1]) {
+        const dx = Math.abs(nodeAddr[0] - neighborAddr[0]);
+        return dx > 1; // If distance > 1, it's a wraparound
+    }
+    
+    // Check vertical wraparound
+    if (nodeAddr[0] === neighborAddr[0]) {
+        const dy = Math.abs(nodeAddr[1] - neighborAddr[1]);
+        return dy > 1; // If distance > 1, it's a wraparound
+    }
+    
+    return false;
+}
+
+function updateBufferChip(element, state, textOverride) {
+    if (!element) return;
+    element.dataset.state = state || 'idle';
+    element.textContent = textOverride || state || 'Idle';
+}
+
+function createInterfaceCard(neighbor, currentAddress) {
+    const card = document.createElement('div');
+    card.className = 'interface-card';
+    
+    // Header
+    const header = document.createElement('div');
+    header.className = 'interface-card__header';
+    
+    const title = document.createElement('h4');
+    const wrapIndicator = neighbor.isWraparound ? ' 🔄' : '';
+    title.textContent = `${neighbor.direction.toUpperCase()} → (${neighbor.address[0]}, ${neighbor.address[1]})${wrapIndicator}`;
+    
+    const badge = document.createElement('span');
+    badge.className = 'interface-card__badge';
+    badge.dataset.variant = neighbor.isWraparound ? 'ring' : 'tree';
+    badge.textContent = neighbor.isWraparound ? 'Wraparound' : 'Direct';
+    
+    header.appendChild(title);
+    header.appendChild(badge);
+    card.appendChild(header);
+    
+    // Buffer status
+    const bufferSection = document.createElement('div');
+    bufferSection.className = 'interface-metrics';
+    
+    const sendBuffer = document.createElement('div');
+    const sendDt = document.createElement('dt');
+    sendDt.textContent = 'Send Buffer';
+    const sendDd = document.createElement('dd');
+    sendDd.textContent = '0 / 4 slots';
+    sendBuffer.appendChild(sendDt);
+    sendBuffer.appendChild(sendDd);
+    
+    const recvBuffer = document.createElement('div');
+    const recvDt = document.createElement('dt');
+    recvDt.textContent = 'Receive Buffer';
+    const recvDd = document.createElement('dd');
+    recvDd.textContent = '0 / 4 slots';
+    recvBuffer.appendChild(recvDt);
+    recvBuffer.appendChild(recvDd);
+    
+    bufferSection.appendChild(sendBuffer);
+    bufferSection.appendChild(recvBuffer);
+    card.appendChild(bufferSection);
+    
+    // Handshake signals
+    const signalRow = document.createElement('div');
+    signalRow.className = 'interface-signal-row';
+    
+    ['REQ', 'ACK', 'DATA', 'CHOKE'].forEach(signal => {
+        const chip = document.createElement('span');
+        chip.className = 'signal-chip';
+        chip.dataset.state = 'low';
+        chip.textContent = `${signal}: LOW`;
+        signalRow.appendChild(chip);
+    });
+    
+    card.appendChild(signalRow);
+    
+    // Status bits
+    const statusRow = document.createElement('div');
+    statusRow.className = 'interface-status-row';
+    
+    ['Busy', 'Transfer', 'Receive'].forEach(bit => {
+        const chip = document.createElement('span');
+        chip.className = 'bit-chip';
+        chip.dataset.state = 'idle';
+        chip.textContent = `${bit}: Idle`;
+        statusRow.appendChild(chip);
+    });
+    
+    card.appendChild(statusRow);
+    
+    return card;
+}
+
+// Add event listeners for node panel
+window.addEventListener('load', () => {
+    const nodePanelClose = document.getElementById('nodePanelClose');
+    const nodePanelScrim = document.getElementById('nodePanelScrim');
+    const autoNodeDetailsBtn = document.getElementById('autoNodeDetailsBtn');
+    
+    if (nodePanelClose) {
+        nodePanelClose.addEventListener('click', closeNodeDetailsPanel);
+    }
+    if (nodePanelScrim) {
+        nodePanelScrim.addEventListener('click', closeNodeDetailsPanel);
+    }
+    if (autoNodeDetailsBtn) {
+        autoNodeDetailsBtn.addEventListener('click', () => {
+            autoNodeDetailsPreference = !autoNodeDetailsPreference;
+            nodePanelAutoTracking = autoNodeDetailsPreference;
+            syncAutoNodeDetailsControl();
+        });
+    }
+});
+
+function syncAutoNodeDetailsControl() {
+    const autoNodeDetailsBtn = document.getElementById('autoNodeDetailsBtn');
+    if (!autoNodeDetailsBtn) return;
+    
+    autoNodeDetailsBtn.classList.toggle('is-active', autoNodeDetailsPreference);
+    autoNodeDetailsBtn.setAttribute('aria-pressed', autoNodeDetailsPreference ? 'true' : 'false');
+    
+    const stateLabel = autoNodeDetailsBtn.querySelector('.control-toggle__state');
+    if (stateLabel) {
+        stateLabel.textContent = autoNodeDetailsPreference ? '( On )' : '( Off )';
     }
 }

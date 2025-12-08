@@ -1536,11 +1536,31 @@ function renderNodeInterfacesSection(meta, runtime) {
             const header = document.createElement('div');
             header.className = 'interface-card__header';
             const title = document.createElement('h4');
-            title.textContent = `Interface to ${safeNodeLabel(iface.neighbor || {})}`;
+            
+            // Determine direction and wraparound for interface
+            let direction = '';
+            let isWraparound = false;
+            if (iface.neighbor && typeof meta.x === 'number' && typeof meta.y === 'number') {
+                const dx = iface.neighbor.x - meta.x;
+                const dy = iface.neighbor.y - meta.y;
+                
+                if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+                    isWraparound = true;
+                }
+                
+                if (dy === -1 || (isWraparound && dy > 0)) direction = 'North';
+                else if (dy === 1 || (isWraparound && dy < 0)) direction = 'South';
+                else if (dx === 1 || (isWraparound && dx < 0)) direction = 'East';
+                else if (dx === -1 || (isWraparound && dx > 0)) direction = 'West';
+            }
+            
+            const directionLabel = direction ? `${direction} → ` : '';
+            title.textContent = `${directionLabel}${safeNodeLabel(iface.neighbor || {})}`;
+            
             const badge = document.createElement('span');
             badge.className = 'interface-card__badge';
-            badge.dataset.variant = iface.linkType === 'ring' ? 'ring' : 'tree';
-            badge.textContent = iface.linkType === 'ring' ? 'Ring link' : 'Tree link';
+            badge.dataset.variant = isWraparound ? 'ring' : (iface.linkType === 'ring' ? 'ring' : 'tree');
+            badge.textContent = isWraparound ? 'Wraparound' : (iface.linkType === 'ring' ? 'Ring link' : 'Tree link');
             header.appendChild(title);
             header.appendChild(badge);
             card.appendChild(header);
@@ -1722,7 +1742,24 @@ function updateNodePanelContent() {
                 .forEach((neighbor) => {
                     const item = document.createElement('li');
                     const label = document.createElement('span');
-                    label.textContent = `(${neighbor.x}, ${neighbor.y})`;
+                    
+                    // Determine direction and wraparound
+                    let direction = '';
+                    let isWraparound = false;
+                    const dx = neighbor.x - meta.x;
+                    const dy = neighbor.y - meta.y;
+                    
+                    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+                        isWraparound = true;
+                    }
+                    
+                    if (dy === -1 || (isWraparound && dy > 0)) direction = 'North';
+                    else if (dy === 1 || (isWraparound && dy < 0)) direction = 'South';
+                    else if (dx === 1 || (isWraparound && dx < 0)) direction = 'East';
+                    else if (dx === -1 || (isWraparound && dx > 0)) direction = 'West';
+                    
+                    label.textContent = `${direction} (${neighbor.x}, ${neighbor.y})`;
+                    
                     const type = document.createElement('span');
                     const sendCap = Number.isFinite(neighbor.sendCapacity)
                         ? neighbor.sendCapacity
@@ -1743,7 +1780,8 @@ function updateNodePanelContent() {
                     const recvDescriptor = recvUsage !== null && recvCap !== '–'
                         ? `${recvUsage}/${recvCap}`
                         : `${recvCap}`;
-                    type.textContent = `${typeLabel} · S:${sendDescriptor} R:${recvDescriptor}`;
+                    const wrapLabel = isWraparound ? 'Wraparound · ' : '';
+                    type.textContent = `${wrapLabel}${typeLabel} · S:${sendDescriptor} R:${recvDescriptor}`;
                     item.appendChild(label);
                     item.appendChild(type);
                     nodePanelNeighbors.appendChild(item);
@@ -1999,6 +2037,18 @@ function selectNode(nodeId) {
 
 function handleCanvasNodeClick(nodeId) {
     if (!nodeId) return;
+    
+    // Handle interface mode
+    if (interfaceMode) {
+        selectedInterfaceNode = nodeId;
+        if (interfacePanel) {
+            interfacePanel.classList.add('is-visible');
+            updateInterfacePanel();
+        }
+        renderTopology();
+        return;
+    }
+    
     if (!pickMode && selectedNodeId === nodeId) {
         closeNodePanel();
         return;
@@ -2088,7 +2138,258 @@ function resizeCanvas() {
     syncNodePanelMode();
 }
 
+// Zoom functionality
+function zoomIn() {
+    const newZoom = clamp(viewState.zoom * 1.2, ZOOM_LIMITS.min, ZOOM_LIMITS.max);
+    if (newZoom !== viewState.zoom) {
+        viewState.zoom = newZoom;
+        renderTopology();
+    }
+}
+
+function zoomOut() {
+    const newZoom = clamp(viewState.zoom / 1.2, ZOOM_LIMITS.min, ZOOM_LIMITS.max);
+    if (newZoom !== viewState.zoom) {
+        viewState.zoom = newZoom;
+        renderTopology();
+    }
+}
+
+function resetView() {
+    viewState.zoom = 1;
+    viewState.panX = 0;
+    viewState.panY = 0;
+    renderTopology();
+}
+
+// Pan functionality for mouse/touch
+let isDragging = false;
+let lastMouseX = 0;
+let lastMouseY = 0;
+
+function handleMouseDown(event) {
+    if (event.button === 0) { // Left mouse button
+        isDragging = true;
+        lastMouseX = event.clientX;
+        lastMouseY = event.clientY;
+        canvas.style.cursor = 'grabbing';
+        event.preventDefault();
+    }
+}
+
+function handleMouseMove(event) {
+    if (isDragging) {
+        const deltaX = event.clientX - lastMouseX;
+        const deltaY = event.clientY - lastMouseY;
+        viewState.panX += deltaX;
+        viewState.panY += deltaY;
+        lastMouseX = event.clientX;
+        lastMouseY = event.clientY;
+        renderTopology();
+        event.preventDefault();
+    }
+}
+
+function handleMouseUp(event) {
+    if (isDragging) {
+        isDragging = false;
+        canvas.style.cursor = 'default';
+        event.preventDefault();
+    }
+}
+
+function handleWheel(event) {
+    if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = event.clientX - rect.left;
+        const mouseY = event.clientY - rect.top;
+        
+        const zoomFactor = event.deltaY > 0 ? 0.9 : 1.1;
+        const newZoom = clamp(viewState.zoom * zoomFactor, ZOOM_LIMITS.min, ZOOM_LIMITS.max);
+        
+        if (newZoom !== viewState.zoom) {
+            // Zoom towards mouse position
+            const zoomRatio = newZoom / viewState.zoom;
+            viewState.panX = mouseX - (mouseX - viewState.panX) * zoomRatio;
+            viewState.panY = mouseY - (mouseY - viewState.panY) * zoomRatio;
+            viewState.zoom = newZoom;
+            renderTopology();
+        }
+    }
+}
+
 window.addEventListener('resize', resizeCanvas);
+
+// Add event listeners for zoom and pan
+if (zoomInBtn) {
+    zoomInBtn.addEventListener('click', zoomIn);
+}
+if (zoomOutBtn) {
+    zoomOutBtn.addEventListener('click', zoomOut);
+}
+if (resetViewBtn) {
+    resetViewBtn.addEventListener('click', resetView);
+}
+
+// Add canvas event listeners for pan and zoom
+if (canvas) {
+    canvas.addEventListener('mousedown', handleMouseDown);
+    canvas.addEventListener('mousemove', handleMouseMove);
+    canvas.addEventListener('mouseup', handleMouseUp);
+    canvas.addEventListener('mouseleave', handleMouseUp);
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+}
+
+// Interface mode functions
+function toggleInterfaceMode() {
+    interfaceMode = !interfaceMode;
+    if (interfaceModeBtn) {
+        interfaceModeBtn.classList.toggle('is-active', interfaceMode);
+        interfaceModeBtn.setAttribute('aria-pressed', interfaceMode ? 'true' : 'false');
+    }
+    
+    if (!interfaceMode) {
+        selectedInterfaceNode = null;
+        if (interfacePanel) {
+            interfacePanel.classList.remove('is-visible');
+        }
+    }
+    
+    if (canvas) {
+        canvas.classList.toggle('interface-mode', interfaceMode);
+    }
+    
+    renderTopology();
+}
+
+function closeInterfacePanel() {
+    if (interfacePanel) {
+        interfacePanel.classList.remove('is-visible');
+    }
+    selectedInterfaceNode = null;
+    renderTopology();
+}
+
+// Update interface panel function
+function updateInterfacePanel() {
+    if (!interfaceMode || !selectedInterfaceNode || !interfacePanel) {
+        return;
+    }
+    
+    const nodeId = selectedInterfaceNode;
+    const meta = nodeMeta.get(nodeId);
+    const runtime = ensureNodeRuntimeState(nodeId);
+    
+    if (!meta) return;
+    
+    // Update interface panel title
+    if (interfacePanelTitle) {
+        interfacePanelTitle.textContent = `Node ${safeNodeLabel(meta)} Interfaces`;
+    }
+    
+    // Get interface details
+    const interfaceDetails = document.getElementById('interfaceDetails');
+    if (interfaceDetails) {
+        interfaceDetails.innerHTML = '';
+        
+        if (Array.isArray(meta.interfaces) && meta.interfaces.length > 0) {
+            meta.interfaces.forEach((iface, index) => {
+                const neighborId = iface.neighbor ? makeNodeId(iface.neighbor) : null;
+                const runtimeOverlay = neighborId && runtime?.interfaces?.get(neighborId) || null;
+                
+                const card = document.createElement('div');
+                card.className = 'interface-detail-card';
+                
+                const header = document.createElement('h4');
+                header.textContent = `Interface ${index + 1}: ${safeNodeLabel(iface.neighbor || {})}`;
+                card.appendChild(header);
+                
+                // Pin states
+                const pinSection = document.createElement('div');
+                pinSection.className = 'pin-section';
+                pinSection.innerHTML = '<h5>Handshake Pins</h5>';
+                
+                const pins = {
+                    ...iface.handshakePins,
+                    ...(runtimeOverlay?.handshakePins || {}),
+                };
+                
+                ['REQ', 'ACK', 'DATA', 'CHOKE'].forEach(pin => {
+                    const pinDiv = document.createElement('div');
+                    pinDiv.className = 'pin-indicator';
+                    const isHigh = Boolean(pins[pin.toLowerCase()]);
+                    pinDiv.innerHTML = `
+                        <span class="pin-name">${pin}:</span>
+                        <span class="pin-state ${isHigh ? 'high' : 'low'}">${isHigh ? 'HIGH' : 'LOW'}</span>
+                    `;
+                    pinSection.appendChild(pinDiv);
+                });
+                card.appendChild(pinSection);
+                
+                // Buffer states
+                const bufferSection = document.createElement('div');
+                bufferSection.className = 'buffer-section';
+                bufferSection.innerHTML = '<h5>Buffers</h5>';
+                
+                const sendSnapshot = resolveBufferSnapshot(iface.sendBuffer, runtimeOverlay?.sendBuffer);
+                const recvSnapshot = resolveBufferSnapshot(iface.receiveBuffer, runtimeOverlay?.receiveBuffer);
+                
+                const sendDiv = document.createElement('div');
+                sendDiv.innerHTML = `
+                    <strong>Send Buffer:</strong> ${sendSnapshot.used}/${sendSnapshot.capacity} slots
+                    <br><small>State: ${sendSnapshot.state || 'idle'}</small>
+                `;
+                bufferSection.appendChild(sendDiv);
+                
+                const recvDiv = document.createElement('div');
+                recvDiv.innerHTML = `
+                    <strong>Receive Buffer:</strong> ${recvSnapshot.used}/${recvSnapshot.capacity} slots
+                    <br><small>State: ${recvSnapshot.state || 'idle'}</small>
+                `;
+                bufferSection.appendChild(recvDiv);
+                
+                card.appendChild(bufferSection);
+                
+                // Status bits
+                const statusSection = document.createElement('div');
+                statusSection.className = 'status-section';
+                statusSection.innerHTML = '<h5>Status Bits</h5>';
+                
+                const statusBits = {
+                    ...iface.statusBits,
+                    ...(runtimeOverlay?.statusBits || {}),
+                };
+                
+                ['busy', 'transfer', 'receive'].forEach(bit => {
+                    const bitDiv = document.createElement('div');
+                    bitDiv.className = 'status-bit';
+                    const isActive = Boolean(statusBits[bit]);
+                    bitDiv.innerHTML = `
+                        <span class="bit-name">${bit.toUpperCase()}:</span>
+                        <span class="bit-state ${isActive ? 'active' : 'inactive'}">${isActive ? 'ACTIVE' : 'INACTIVE'}</span>
+                    `;
+                    statusSection.appendChild(bitDiv);
+                });
+                
+                card.appendChild(statusSection);
+                interfaceDetails.appendChild(card);
+            });
+        } else {
+            const emptyMsg = document.createElement('p');
+            emptyMsg.textContent = 'No interfaces available for this node.';
+            interfaceDetails.appendChild(emptyMsg);
+        }
+    }
+}
+
+// Add interface mode event listeners
+if (interfaceModeBtn) {
+    interfaceModeBtn.addEventListener('click', toggleInterfaceMode);
+}
+if (interfacePanelClose) {
+    interfacePanelClose.addEventListener('click', closeInterfacePanel);
+}
 
 function computeLayout(rect, width, height) {
     const padding = 80;
@@ -2987,7 +3288,7 @@ function fetchTopology() {
         .then((res) => res.json())
         .then((data) => {
             ingestTopologyPayload(data);
-            hudStatus.textContent = `Loaded ${levelToRingCount(data.numLevels)} rings`;
+            hudStatus.textContent = 'Loaded topology';
             setStatusIdle();
         })
         .catch((err) => {
@@ -4530,6 +4831,9 @@ function highlightMultiRouteCard(index) {
 function renderFlow(flowEntries) {
     flowLog.innerHTML = '';
     flowCardElements = [];
+    if (!flowEntries || !Array.isArray(flowEntries)) {
+        return;
+    }
     flowEntries.forEach((entry) => {
         const card = document.createElement('article');
         card.className = 'flow-entry';
@@ -4546,11 +4850,13 @@ function renderFlow(flowEntries) {
 
         const list = document.createElement('ul');
         list.className = 'flow-entry__details';
-        entry.details.forEach((detail) => {
-            const item = document.createElement('li');
-            item.textContent = detail;
-            list.appendChild(item);
-        });
+        if (entry.details && Array.isArray(entry.details)) {
+            entry.details.forEach((detail) => {
+                const item = document.createElement('li');
+                item.textContent = detail;
+                list.appendChild(item);
+            });
+        }
         card.appendChild(list);
 
         flowLog.appendChild(card);
@@ -5711,7 +6017,7 @@ function prepareRoute(payload, options = {}) {
     if (isCompleted) {
         summary.textContent += ' · Completed';
     }
-    renderFlow(payload.flow);
+    renderFlow(payload.flow || []);
     highlightFlowCard(0);
     const hasSegments = Array.isArray(payload.segments) && payload.segments.length > 0;
     const animateLabel = options.buttonLabel || options.contextLabel || animateBtn?.dataset?.defaultLabel;
@@ -6405,17 +6711,7 @@ applyTopologyBtn.addEventListener('click', () => {
         });
 });
 
-zoomInBtn.addEventListener('click', () => {
-    const rect = canvas.getBoundingClientRect();
-    applyZoom(1.2, rect.width / 2, rect.height / 2);
-});
-
-zoomOutBtn.addEventListener('click', () => {
-    const rect = canvas.getBoundingClientRect();
-    applyZoom(1 / 1.2, rect.width / 2, rect.height / 2);
-});
-
-resetViewBtn.addEventListener('click', resetView);
+// Zoom button event listeners are already added earlier in the file
 
 if (cursorModeBtn) {
     cursorModeBtn.addEventListener('click', () => {
@@ -6760,3 +7056,126 @@ if (interfacePanelClose) {
     console.log('Interface panel close listener added');
 }
 
+
+// Torus-specific helper functions for node details panel
+function getTorusNeighbors(x, y) {
+    if (!topologyData) return [];
+    
+    const width = topologyData.width;
+    const height = topologyData.height;
+    const neighbors = [];
+    
+    // North neighbor (with wraparound)
+    const northY = (y - 1 + height) % height;
+    neighbors.push({
+        x: x,
+        y: northY,
+        direction: 'north',
+        isWraparound: y === 0
+    });
+    
+    // South neighbor (with wraparound)
+    const southY = (y + 1) % height;
+    neighbors.push({
+        x: x,
+        y: southY,
+        direction: 'south',
+        isWraparound: y === height - 1
+    });
+    
+    // East neighbor (with wraparound)
+    const eastX = (x + 1) % width;
+    neighbors.push({
+        x: eastX,
+        y: y,
+        direction: 'east',
+        isWraparound: x === width - 1
+    });
+    
+    // West neighbor (with wraparound)
+    const westX = (x - 1 + width) % width;
+    neighbors.push({
+        x: westX,
+        y: y,
+        direction: 'west',
+        isWraparound: x === 0
+    });
+    
+    return neighbors;
+}
+
+function createInterfaceCard(neighbor) {
+    const card = document.createElement('div');
+    card.className = 'interface-card';
+    
+    // Header
+    const header = document.createElement('div');
+    header.className = 'interface-card__header';
+    
+    const title = document.createElement('h4');
+    const wrapIndicator = neighbor.isWraparound ? ' 🔄' : '';
+    title.textContent = `${neighbor.direction.toUpperCase()} → (${neighbor.x}, ${neighbor.y})${wrapIndicator}`;
+    
+    const badge = document.createElement('span');
+    badge.className = 'interface-card__badge';
+    badge.dataset.variant = neighbor.isWraparound ? 'ring' : 'tree';
+    badge.textContent = neighbor.isWraparound ? 'Wraparound' : 'Direct';
+    
+    header.appendChild(title);
+    header.appendChild(badge);
+    card.appendChild(header);
+    
+    // Buffer status
+    const bufferSection = document.createElement('div');
+    bufferSection.className = 'interface-metrics';
+    
+    const sendBuffer = document.createElement('div');
+    const sendDt = document.createElement('dt');
+    sendDt.textContent = 'Send Buffer';
+    const sendDd = document.createElement('dd');
+    sendDd.textContent = '0 / 4 slots';
+    sendBuffer.appendChild(sendDt);
+    sendBuffer.appendChild(sendDd);
+    
+    const recvBuffer = document.createElement('div');
+    const recvDt = document.createElement('dt');
+    recvDt.textContent = 'Receive Buffer';
+    const recvDd = document.createElement('dd');
+    recvDd.textContent = '0 / 4 slots';
+    recvBuffer.appendChild(recvDt);
+    recvBuffer.appendChild(recvDd);
+    
+    bufferSection.appendChild(sendBuffer);
+    bufferSection.appendChild(recvBuffer);
+    card.appendChild(bufferSection);
+    
+    // Handshake signals
+    const signalRow = document.createElement('div');
+    signalRow.className = 'interface-signal-row';
+    
+    ['REQ', 'ACK', 'DATA', 'CHOKE'].forEach(signal => {
+        const chip = document.createElement('span');
+        chip.className = 'signal-chip';
+        chip.dataset.state = 'low';
+        chip.textContent = `${signal}: LOW`;
+        signalRow.appendChild(chip);
+    });
+    
+    card.appendChild(signalRow);
+    
+    // Status bits
+    const statusRow = document.createElement('div');
+    statusRow.className = 'interface-status-row';
+    
+    ['Busy', 'Transfer', 'Receive'].forEach(bit => {
+        const chip = document.createElement('span');
+        chip.className = 'bit-chip';
+        chip.dataset.state = 'idle';
+        chip.textContent = `${bit}: Idle`;
+        statusRow.appendChild(chip);
+    });
+    
+    card.appendChild(statusRow);
+    
+    return card;
+}

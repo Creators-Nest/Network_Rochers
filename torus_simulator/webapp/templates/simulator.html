@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Torus Network Visualizer</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=2">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 </head>
 <body class="simulator-page">
@@ -360,7 +360,7 @@
         </section>
 
         <section class="node-panel__section" aria-labelledby="node-panel-neighbors-label">
-            <h3 id="node-panel-neighbors-label">Links (with wraparound)</h3>
+            <h3 id="node-panel-neighbors-label">Links</h3>
             <ul id="nodePanelNeighbors" class="node-panel__neighbors"></ul>
         </section>
 
@@ -377,6 +377,86 @@
     </div>
 
     <div id="nodePanelScrim" class="node-panel__scrim" aria-hidden="true"></div>
+
+    <!-- Node Internal View Panel -->
+    <div id="nodeInternal" class="node-internal-panel">
+        <div class="node-internal-header">
+            <h3 id="nodeInternalTitle">Node Internal View</h3>
+            <button onclick="hideNodeInternal()" class="node-internal-close">&times;</button>
+        </div>
+        <div class="node-internal-body">
+            <!-- Pins Section -->
+            <div class="node-internal-section">
+                <h4>Pins</h4>
+                <div class="pins-grid">
+                    <div id="pin-req" class="pin inactive">
+                        <span class="pin-label">REQ</span>
+                    </div>
+                    <div id="pin-ack" class="pin inactive">
+                        <span class="pin-label">ACK</span>
+                    </div>
+                    <div id="pin-data" class="pin inactive">
+                        <span class="pin-label">DATA</span>
+                    </div>
+                    <div id="pin-clk" class="pin inactive">
+                        <span class="pin-label">CLK</span>
+                    </div>
+                    <div id="pin-choke" class="pin inactive">
+                        <span class="pin-label">CHOKE</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Registers Section -->
+            <div class="node-internal-section">
+                <h4>Registers</h4>
+                <div class="registers-grid">
+                    <div id="send-register" class="register">Send Register: Empty</div>
+                    <div id="receive-register" class="register">Receive Register: Empty</div>
+                </div>
+            </div>
+
+            <!-- Buffers Section -->
+            <div class="node-internal-section">
+                <h4>Buffers</h4>
+                <div class="buffers-grid">
+                    <div class="buffer-container">
+                        <div class="buffer-header">
+                            <span>Send Buffer</span>
+                            <span id="send-buffer-count" class="buffer-count">0/4</span>
+                        </div>
+                        <div id="send-buffer-vis" class="buffer-visual"></div>
+                    </div>
+                    <div class="buffer-container">
+                        <div class="buffer-header">
+                            <span>Receive Buffer</span>
+                            <span id="receive-buffer-count" class="buffer-count">0/4</span>
+                        </div>
+                        <div id="receive-buffer-vis" class="buffer-visual"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Status Bits Section -->
+            <div class="node-internal-section">
+                <h4>Status Bits</h4>
+                <div class="status-bits-grid">
+                    <div class="status-bit">
+                        <span class="status-bit-label">Receive</span>
+                        <div id="bit-receive" class="indicator off"></div>
+                    </div>
+                    <div class="status-bit">
+                        <span class="status-bit-label">Transfer</span>
+                        <div id="bit-transfer" class="indicator off"></div>
+                    </div>
+                    <div class="status-bit">
+                        <span class="status-bit-label">Busy</span>
+                        <div id="bit-busy" class="indicator off"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Interface Live View Panel -->
     <div id="interfacePanel" class="interface-panel">
@@ -480,6 +560,7 @@
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=3" defer></script>
+    <script src="{{ url_for('static', filename='js/interface_live_update.js') }}" defer></script>
 </body>
 </html>

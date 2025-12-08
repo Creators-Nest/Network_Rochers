@@ -90,7 +90,7 @@ class EnhancedTorusTopology:
                 if west_addr not in current_node.interfaces:
                     current_node.add_interface(west_addr, self.buffer_capacity)
         
-        print(f"✓ Created {len(self.nodes)} nodes with wraparound connections")
+        print(f"Created {len(self.nodes)} nodes with wraparound connections")
     
     def _build_routing_tables(self):
         """Build XY routing tables for all nodes with torus wraparound"""
@@ -105,7 +105,7 @@ class EnhancedTorusTopology:
                     path = router.get_full_path(source_addr, dest_addr)
                     source_node.add_route(dest_addr, path)
         
-        print(f"✓ Routing tables built for {len(self.nodes)} nodes")
+        print(f"Routing tables built for {len(self.nodes)} nodes")
     
     def get_node(self, address: Tuple[int, int]) -> EnhancedNode:
         """Get node by address"""

@@ -285,6 +285,8 @@ class EnhancedInterface:
     def get_status(self) -> dict:
         """Get current interface status for monitoring"""
         return {
+            'node': self.node_address,
+            'neighbor': self.neighbor_address,
             'pins': {
                 'REQ': self.pin_REQ,
                 'ACK': self.pin_ACK,
@@ -300,19 +302,135 @@ class EnhancedInterface:
                 'send': {
                     'size': self.send_buffer.size(),
                     'capacity': self.send_buffer.capacity,
-                    'is_full': self.send_buffer.is_full()
+                    'full': self.send_buffer.is_full(),
+                    'empty': self.send_buffer.is_empty()
                 },
                 'receive': {
                     'size': self.receive_buffer.size(),
                     'capacity': self.receive_buffer.capacity,
-                    'is_full': self.receive_buffer.is_full()
+                    'full': self.receive_buffer.is_full(),
+                    'empty': self.receive_buffer.is_empty()
                 }
             },
             'status_bits': {
                 'busy': self.bit_Busy,
-                'transfer': self.bit_Transfer,
-                'receive': self.bit_Receive
+                'receive': self.bit_Receive,
+                'transfer': self.bit_Transfer
             },
             'state': self.handshake_state,
             'clock_cycle': self.clock_cycle
         }
+    
+    def update_sender_logic(self):
+        """Implements sender side handshake protocol for torus topology"""
+        if not hasattr(self, 'connected_interface') or not self.connected_interface:
+            return
+        
+        # Release after transfer complete
+        if self.bit_Transfer:
+            if self.connected_interface.bit_Receive:
+                return  # Receiver still processing
+            
+            # Clear transfer state
+            self.send_register = None
+            self.pin_DATA = None
+            self.bit_Transfer = False
+            self.bit_Busy = False
+            self.pin_REQ = False
+            self.timeout_counter = 0
+            return
+        
+        # Wait for ACK
+        if self.bit_Busy:
+            if self.connected_interface.pin_ACK:
+                packet = self.send_buffer.pop()
+                if packet:
+                    self.send_register = packet
+                    self.pin_DATA = packet
+                    self.bit_Transfer = True
+                    self.timeout_counter = 0
+                else:
+                    self.pin_REQ = False
+                    self.bit_Busy = False
+                    self.timeout_counter = 0
+                return
+            
+            self.timeout_counter += 1
+            if self.timeout_counter >= getattr(self, 'TIMEOUT_LIMIT', 10):
+                self.pin_REQ = False
+                self.bit_Busy = False
+                self.timeout_counter = 0
+            return
+        
+        # Start new transfer
+        if not self.send_buffer.is_empty():
+            if not self.connected_interface.bit_Busy and not self.connected_interface.pin_CHOKE:
+                self.pin_REQ = True
+                self.bit_Busy = True
+                self.timeout_counter = 0
+    
+    def update_receiver_logic(self):
+        """Implements receiver side handshake protocol for torus topology"""
+        if not hasattr(self, 'connected_interface') or not self.connected_interface:
+            return
+        
+        # Clear CHOKE when buffer space available
+        if self.pin_CHOKE and not self.receive_buffer.is_full():
+            self.pin_CHOKE = False
+        
+        # Wait for REQ
+        if not self.bit_Busy and not self.bit_Receive:
+            if self.connected_interface.pin_REQ:
+                if not self.receive_buffer.is_full():
+                    self.pin_ACK = True
+                    self.bit_Busy = True
+                    self.bit_Receive = True
+                else:
+                    self.pin_CHOKE = True
+            return
+        
+        # Receive data
+        if self.bit_Receive:
+            if self.connected_interface.pin_DATA:
+                packet = self.connected_interface.pin_DATA
+                self.receive_register = packet
+                self.receive_buffer.push(packet)
+                self.receive_register = None
+                self.pin_ACK = False
+                self.bit_Receive = False
+                self.bit_Busy = False
+    
+    def connect_to(self, other_interface):
+        """Create bidirectional connection for torus topology"""
+        self.connected_interface = other_interface
+        other_interface.connected_interface = self
+        # Initialize timeout counter
+        self.timeout_counter = 0
+        other_interface.timeout_counter = 0
+        self.TIMEOUT_LIMIT = 10
+        other_interface.TIMEOUT_LIMIT = 10
+    
+    def reset(self):
+        """Reset interface to initial state"""
+        self.pin_REQ = False
+        self.pin_ACK = False
+        self.pin_DATA = None
+        self.pin_CLK = False
+        self.pin_CHOKE = False
+        
+        self.send_register = None
+        self.receive_register = None
+        
+        self.send_buffer.clear()
+        self.receive_buffer.clear()
+        
+        self.bit_Busy = False
+        self.bit_Receive = False
+        self.bit_Transfer = False
+        
+        self.handshake_state = 'IDLE'
+        self.clock_cycle = 0
+        self.transfer_delay = 0
+    
+    def __repr__(self):
+        return f"EnhancedInterface({self.node_address} <-> {self.neighbor_address})"

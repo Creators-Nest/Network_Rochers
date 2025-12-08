@@ -71,11 +71,7 @@ def get_topology():
             topology = EnhancedTorusTopology(width=width, height=height)
             simulator = Simulator(topology)
             
-            return jsonify({
-                'status': 'success',
-                'message': f'Topology updated to {width}x{height}',
-                'topology_data': get_topology_data()
-            })
+            return jsonify(get_topology_data())
         except Exception as e:
             return jsonify({'status': 'error', 'message': str(e)}), 500
     
@@ -83,10 +79,7 @@ def get_topology():
     if topology is None:
         return jsonify({'status': 'error', 'message': 'Topology not initialized'}), 400
     
-    return jsonify({
-        'status': 'success',
-        'data': get_topology_data()
-    })
+    return jsonify(get_topology_data())
 
 @app.route('/api/node/<int:x>/<int:y>')
 def get_node_info(x, y):
@@ -118,14 +111,14 @@ def get_node_info(x, y):
             },
             'buffers': {
                 'send': {
-                    'size': len(interface.send_buffer.buffer),
-                    'capacity': interface.send_buffer.buffer.maxlen,
-                    'packets': [str(p) for p in interface.send_buffer.buffer]
+                    'size': interface.send_buffer.size(),
+                    'capacity': interface.send_buffer.capacity,
+                    'packets': [str(p) for p in list(interface.send_buffer.buffer)]
                 },
                 'receive': {
-                    'size': len(interface.receive_buffer.buffer),
-                    'capacity': interface.receive_buffer.buffer.maxlen,
-                    'packets': [str(p) for p in interface.receive_buffer.buffer]
+                    'size': interface.receive_buffer.size(),
+                    'capacity': interface.receive_buffer.capacity,
+                    'packets': [str(p) for p in list(interface.receive_buffer.buffer)]
                 }
             },
             'status_bits': {
@@ -187,11 +180,27 @@ def find_route():
             'type': 'mesh'  # Torus uses mesh-style segments
         })
         
+        # Build flow timeline entries in the format expected by frontend
+        hop_num = i + 1
+        from_label = f"({path[i][0]}, {path[i][1]})"
+        to_label = f"({path[i+1][0]}, {path[i+1][1]})"
+        
+        # Determine if this is a wraparound connection
+        dx = abs(path[i+1][0] - path[i][0])
+        dy = abs(path[i+1][1] - path[i][1])
+        is_wrap = dx > 1 or dy > 1
+        link_type = "Wraparound" if is_wrap else "Direct"
+        
+        is_final = i == len(path) - 2
+        
         flow.append({
-            'step': i + 1,
-            'from': from_node,
-            'to': to_node,
-            'action': 'forward' if i < len(path) - 2 else 'deliver'
+            'phase': f"Hop {hop_num}",
+            'title': f"{from_label} → {to_label}",
+            'details': [
+                f"Link type: {link_type}",
+                f"Action: {'Deliver to destination' if is_final else 'Forward to next hop'}",
+                f"Hop {hop_num} of {len(path) - 1}"
+            ]
         })
     
     # Convert path to node objects
@@ -322,8 +331,8 @@ def simulate_transfer():
                     'receive': interface.bit_Receive
                 },
                 'buffers': {
-                    'send': len(interface.send_buffer.buffer),
-                    'receive': len(interface.receive_buffer.buffer)
+                    'send': interface.send_buffer.size(),
+                    'receive': interface.receive_buffer.size()
                 }
             }
         }
@@ -425,12 +434,59 @@ def get_topology_data():
     edges_data = []
     
     for addr, node in topology.nodes.items():
+        # Get neighbors with their interface information
+        neighbors_list = []
+        interfaces_list = []
+        
+        for neighbor_addr, interface in node.interfaces.items():
+            neighbors_list.append({
+                'x': neighbor_addr[0],
+                'y': neighbor_addr[1],
+                'type': 'ring',  # Torus connections
+                'sendCapacity': interface.send_buffer.capacity,
+                'receiveCapacity': interface.receive_buffer.capacity,
+                'sendUsage': interface.send_buffer.size(),
+                'receiveUsage': interface.receive_buffer.size()
+            })
+            
+            interfaces_list.append({
+                'neighbor': {'x': neighbor_addr[0], 'y': neighbor_addr[1]},
+                'linkType': 'ring',
+                'sendBuffer': {
+                    'capacity': interface.send_buffer.capacity,
+                    'used': interface.send_buffer.size()
+                },
+                'receiveBuffer': {
+                    'capacity': interface.receive_buffer.capacity,
+                    'used': interface.receive_buffer.size()
+                },
+                'handshakePins': {
+                    'req': interface.pin_REQ,
+                    'ack': interface.pin_ACK,
+                    'data': interface.pin_DATA is not None,
+                    'choke': interface.pin_CHOKE
+                },
+                'statusBits': {
+                    'busy': interface.bit_Busy,
+                    'transfer': interface.bit_Transfer,
+                    'receive': interface.bit_Receive
+                },
+                'sendRegister': None,
+                'receiveRegister': None,
+                'dataLine': None,
+                'timeout': {'value': 0, 'limit': 100}
+            })
+        
         nodes_data.append({
             'id': f"{addr[0]}-{addr[1]}",  # Required by frontend
             'address': addr,
             'x': addr[0],
             'y': addr[1],
-            'num_interfaces': len(node.interfaces)
+            'degree': len(node.interfaces),
+            'num_interfaces': len(node.interfaces),
+            'neighbors': neighbors_list,
+            'interfaces': interfaces_list,
+            'routingTable': []
         })
         
         # For torus, add all edges including wraparound connections
@@ -501,7 +557,7 @@ def get_node_state():
         send_reg_state = None
         if interface.send_register is not None:
             send_reg_state = {
-                'packet_id': getattr(interface.send_register, 'packet_id', None),
+                'packet_id': str(interface.send_register),
                 'source': getattr(interface.send_register, 'source_address', None),
                 'dest': getattr(interface.send_register, 'dest_address', None)
             }
@@ -509,7 +565,7 @@ def get_node_state():
         recv_reg_state = None
         if interface.receive_register is not None:
             recv_reg_state = {
-                'packet_id': getattr(interface.receive_register, 'packet_id', None),
+                'packet_id': str(interface.receive_register),
                 'source': getattr(interface.receive_register, 'source_address', None),
                 'dest': getattr(interface.receive_register, 'dest_address', None)
             }
@@ -518,7 +574,7 @@ def get_node_state():
         send_buffer_packets = []
         for pkt in list(interface.send_buffer.buffer):
             send_buffer_packets.append({
-                'packet_id': getattr(pkt, 'packet_id', None),
+                'packet_id': str(pkt),
                 'source': getattr(pkt, 'source_address', None),
                 'dest': getattr(pkt, 'dest_address', None)
             })
@@ -526,7 +582,7 @@ def get_node_state():
         recv_buffer_packets = []
         for pkt in list(interface.receive_buffer.buffer):
             recv_buffer_packets.append({
-                'packet_id': getattr(pkt, 'packet_id', None),
+                'packet_id': str(pkt),
                 'source': getattr(pkt, 'source_address', None),
                 'dest': getattr(pkt, 'dest_address', None)
             })
@@ -534,11 +590,11 @@ def get_node_state():
         interfaces[direction] = {
             'neighbor': neighbor_addr,
             'pins': {
-                'req': interface.pin_REQ,
-                'ack': interface.pin_ACK,
+                'req': bool(interface.pin_REQ),
+                'ack': bool(interface.pin_ACK),
                 'data': interface.pin_DATA is not None,
-                'clk': interface.pin_CLK,
-                'choke': interface.pin_CHOKE
+                'clk': bool(interface.pin_CLK),
+                'choke': bool(interface.pin_CHOKE)
             },
             'send_register': send_reg_state,
             'receive_register': recv_reg_state,
@@ -553,9 +609,9 @@ def get_node_state():
                 'packets': recv_buffer_packets
             },
             'status_bits': {
-                'receive': interface.bit_Receive,
-                'transfer': interface.bit_Transfer,
-                'busy': interface.bit_Busy
+                'receive': bool(interface.bit_Receive),
+                'transfer': bool(interface.bit_Transfer),
+                'busy': bool(interface.bit_Busy)
             }
         }
     
@@ -574,11 +630,11 @@ def get_node_state():
     
     if node.interfaces:
         first_interface = list(node.interfaces.values())[0]
-        pins_aggregate['req'] = first_interface.pin_REQ
-        pins_aggregate['ack'] = first_interface.pin_ACK
+        pins_aggregate['req'] = bool(first_interface.pin_REQ)
+        pins_aggregate['ack'] = bool(first_interface.pin_ACK)
         pins_aggregate['data'] = first_interface.pin_DATA is not None
-        pins_aggregate['clk'] = first_interface.pin_CLK
-        pins_aggregate['choke'] = first_interface.pin_CHOKE
+        pins_aggregate['clk'] = bool(first_interface.pin_CLK)
+        pins_aggregate['choke'] = bool(first_interface.pin_CHOKE)
         send_buffer_count = first_interface.send_buffer.size()
         receive_buffer_count = first_interface.receive_buffer.size()
         buffer_capacity = first_interface.send_buffer.capacity
