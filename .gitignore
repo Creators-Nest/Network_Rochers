@@ -205,3 +205,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Results folder
+multi_topology_harness/results/
+
+# macOS
+.DS_Store
