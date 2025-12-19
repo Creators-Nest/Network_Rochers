@@ -1,0 +1,106 @@
+{
+  "timestamp": "2025-12-17T14:30:24.943340",
+  "node_counts": [
+    4,
+    8,
+    16,
+    32,
+    64
+  ],
+  "mesh": [
+    {
+      "n": 4,
+      "max_hop": 2,
+      "avg_hop": 1.0,
+      "wire_segments": 4
+    },
+    {
+      "n": 8,
+      "max_hop": 4,
+      "avg_hop": 1.75,
+      "wire_segments": 10
+    },
+    {
+      "n": 16,
+      "max_hop": 6,
+      "avg_hop": 2.5,
+      "wire_segments": 24
+    },
+    {
+      "n": 32,
+      "max_hop": 10,
+      "avg_hop": 3.88,
+      "wire_segments": 52
+    },
+    {
+      "n": 64,
+      "max_hop": 14,
+      "avg_hop": 5.25,
+      "wire_segments": 112
+    }
+  ],
+  "torus": [
+    {
+      "n": 4,
+      "max_hop": 2,
+      "avg_hop": 1.0,
+      "wire_segments": 4
+    },
+    {
+      "n": 8,
+      "max_hop": 3,
+      "avg_hop": 1.5,
+      "wire_segments": 12
+    },
+    {
+      "n": 16,
+      "max_hop": 4,
+      "avg_hop": 2.0,
+      "wire_segments": 32
+    },
+    {
+      "n": 32,
+      "max_hop": 6,
+      "avg_hop": 3.0,
+      "wire_segments": 64
+    },
+    {
+      "n": 64,
+      "max_hop": 8,
+      "avg_hop": 4.0,
+      "wire_segments": 128
+    }
+  ],
+  "ricobit": [
+    {
+      "n": 6,
+      "max_hop": 2,
+      "avg_hop": 1.17,
+      "wire_segments": 9
+    },
+    {
+      "n": 6,
+      "max_hop": 2,
+      "avg_hop": 1.17,
+      "wire_segments": 9
+    },
+    {
+      "n": 14,
+      "max_hop": 4,
+      "avg_hop": 1.93,
+      "wire_segments": 25
+    },
+    {
+      "n": 30,
+      "max_hop": 6,
+      "avg_hop": 2.94,
+      "wire_segments": 57
+    },
+    {
+      "n": 62,
+      "max_hop": 8,
+      "avg_hop": 4.24,
+      "wire_segments": 121
+    }
+  ]
+}

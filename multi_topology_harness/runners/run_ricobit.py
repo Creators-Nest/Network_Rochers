@@ -2,6 +2,8 @@
 """
 Standalone RiCoBiT Topology Simulation Runner
 Runs RiCoBiT simulation and outputs results to a JSON file
+
+Uses comprehensive network metrics with standard NoC formulas.
 """
 
 import sys
@@ -9,6 +11,7 @@ import os
 import json
 import random
 import argparse
+import time
 from datetime import datetime
 
 # Add parent directory to path
@@ -18,9 +21,14 @@ from topology.ricobit.ricobit_topology import RiCoBiT_Topology
 from simulation.ricobit.simulator import Simulator
 from core.ricobit.packet import Packet
 
+# Import comprehensive metrics
+from unified_harness.network_metrics import (
+    NetworkMetrics, PacketData
+)
+
 
 def run_ricobit_simulation(config: dict) -> dict:
-    """Run RiCoBiT topology simulation"""
+    """Run RiCoBiT topology simulation with comprehensive metrics"""
     
     print("=" * 60)
     print("RiCoBiT TOPOLOGY SIMULATION")
@@ -34,8 +42,11 @@ def run_ricobit_simulation(config: dict) -> dict:
         "packets_delivered": 0,
         "total_cycles": 0,
         "packet_log": [],
-        "metrics": {}
+        "metrics": {},
+        "detailed_metrics": {}
     }
+    
+    start_time = time.time()
     
     try:
         # Set random seed if provided
@@ -59,15 +70,27 @@ def run_ricobit_simulation(config: dict) -> dict:
         topology = RiCoBiT_Topology(num_levels=num_levels)
         
         node_addresses = list(topology.nodes.keys())
+        total_nodes = len(node_addresses)
         
-        print(f"  Total nodes: {len(node_addresses)}")
+        print(f"  Total nodes: {total_nodes}")
+        
+        # Initialize comprehensive metrics
+        metrics = NetworkMetrics(
+            topology_type="ricobit",
+            total_nodes=total_nodes,
+            num_levels=num_levels,
+            buffer_capacity=buffer_capacity,
+            max_cycles=max_cycles
+        )
         
         # Create simulator
         simulator = Simulator(topology)
         
-        # Generate packets
+        # Generate packets with tracking data
         print(f"\n--- Packet Source -> Destination Log (RICOBIT) ---")
         packets = []
+        packet_map = {}  # Map packet_id to PacketData
+        
         for i in range(num_packets):
             src = random.choice(node_addresses)
             dst = random.choice([addr for addr in node_addresses if addr != src])
@@ -80,6 +103,20 @@ def run_ricobit_simulation(config: dict) -> dict:
                 packet_id=f"pkt_{i}"
             )
             packets.append(packet)
+            
+            # For RiCoBiT, estimate distance based on tree structure
+            # Maximum distance is 2 * (num_levels - 1)
+            estimated_dist = 2 * (num_levels - 1)
+            
+            packet_data = PacketData(
+                packet_id=f"pkt_{i}",
+                source=src,
+                destination=dst,
+                injection_cycle=0,
+                manhattan_distance=estimated_dist  # Approximate for tree topology
+            )
+            metrics.packets.append(packet_data)
+            packet_map[f"pkt_{i}"] = packet_data
             
             log_entry = {"packet_id": f"pkt_{i}", "src": str(src), "dst": str(dst)}
             result["packet_log"].append(log_entry)
@@ -104,36 +141,85 @@ def run_ricobit_simulation(config: dict) -> dict:
             
             # Check if all delivered
             if simulator.metrics.delivered_count >= len(packets):
+                metrics.simulation_completed = True
                 break
             
             # Progress logging
-            if cycles % 100 == 0:
+            if cycles % 1000 == 0:
                 print(f"  Cycle {cycles}: Delivered {simulator.metrics.delivered_count}/{len(packets)}")
         
-        # Collect results
-        metrics = simulator.metrics
+        # Collect results from simulator metrics
+        sim_metrics = simulator.metrics
+        
+        # Update packet metrics with delivery information from simulator
+        # RiCoBiT uses _deliveries dict containing PacketDelivery objects
+        for pkt_id, delivery in sim_metrics._deliveries.items():
+            if pkt_id in packet_map:
+                packet_data = packet_map[pkt_id]
+                packet_data.delivered = True
+                
+                # Get timing information from injection record
+                injection = sim_metrics._injections.get(pkt_id)
+                if injection:
+                    packet_data.injection_cycle = injection.start_clock
+                packet_data.delivery_cycle = delivery.delivered_clock
+                
+                # Get hop count from delivery
+                packet_data.hop_count = delivery.hop_count
+        
+        # Finalize metrics
+        metrics.total_simulation_cycles = cycles
+        metrics.execution_time_seconds = time.time() - start_time
         
         result["total_cycles"] = cycles
-        result["packets_delivered"] = metrics.delivered_count
+        result["packets_delivered"] = sim_metrics.delivered_count
         result["success"] = True
+        
+        # Get comprehensive metrics
+        detailed = metrics.to_dict()
+        result["detailed_metrics"] = detailed
+        
+        # Also provide legacy format for backward compatibility
         result["metrics"] = {
-            "nodes": len(topology.nodes),
-            "avg_latency": metrics.average_latency(),
-            "min_latency": metrics.min_latency(),
-            "max_latency": metrics.max_latency(),
-            "throughput": metrics.delivered_count / cycles if cycles > 0 else 0,
-            "delivery_rate": (metrics.delivered_count / len(packets) * 100) if packets else 0,
-            "avg_hops": metrics.average_hop_count()
+            "nodes": metrics.total_nodes,
+            "delivery_rate": metrics.delivery_rate,
+            "avg_latency": metrics.avg_latency,
+            "min_latency": metrics.min_latency,
+            "max_latency": metrics.max_latency,
+            "median_latency": metrics.median_latency,
+            "latency_std_dev": metrics.latency_std_dev,
+            "jitter": metrics.jitter,
+            "percentile_90": metrics.latency_percentile_90,
+            "percentile_95": metrics.latency_percentile_95,
+            "percentile_99": metrics.latency_percentile_99,
+            "throughput": metrics.throughput_packets_per_cycle,
+            "throughput_normalized": metrics.throughput_packets_per_node_per_cycle,
+            "effective_bandwidth": metrics.effective_bandwidth,
+            "accepted_traffic": metrics.accepted_traffic,
+            "avg_hops": metrics.avg_hop_count,
+            "min_hops": metrics.min_hop_count,
+            "max_hops": metrics.max_hop_count,
+            "routing_efficiency": metrics.avg_routing_efficiency,
+            "latency_per_hop": metrics.latency_per_hop,
+            "energy_proxy": metrics.energy_consumption_proxy,
+            "network_load": metrics.network_load,
+            "saturation_state": metrics.saturation_indicator,
+            "scalability_factor": metrics.scalability_factor,
+            "network_diameter": metrics.network_diameter,
         }
         
         print()
         print("=" * 60)
         print(f"RICOBIT SIMULATION COMPLETE")
-        print(f"  Packets Delivered: {result['packets_delivered']}/{result['packets_injected']}")
+        print(f"  Packets Delivered: {result['packets_delivered']}/{result['packets_injected']} ({metrics.delivery_rate:.1f}%)")
         print(f"  Total Cycles: {result['total_cycles']}")
-        print(f"  Avg Latency: {result['metrics']['avg_latency']:.2f}")
-        print(f"  Avg Hops: {result['metrics']['avg_hops']:.2f}")
-        print(f"  Throughput: {result['metrics']['throughput']:.4f} packets/cycle")
+        print(f"  Network State: {metrics.saturation_indicator}")
+        print(f"  Avg Latency: {metrics.avg_latency:.2f} cycles")
+        print(f"  Median Latency: {metrics.median_latency:.2f} cycles")
+        print(f"  Latency Jitter: {metrics.jitter} cycles")
+        print(f"  Throughput: {metrics.throughput_packets_per_cycle:.6f} packets/cycle")
+        print(f"  Avg Hops: {metrics.avg_hop_count:.2f}")
+        print(f"  Execution Time: {metrics.execution_time_seconds:.3f}s")
         print("=" * 60)
         
     except Exception as e:

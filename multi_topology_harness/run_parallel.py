@@ -3,6 +3,12 @@
 Parallel Multi-Topology Simulation Orchestrator
 Launches each topology simulation in a separate terminal process and collects results
 
+Enhanced with comprehensive NoC (Network-on-Chip) metrics following standard formulas:
+- Latency: Average, Min, Max, Median, Percentiles (90th, 95th, 99th), Jitter, CV
+- Throughput: Packets/cycle, Normalized, Effective Bandwidth
+- Hop Count: Average, Min, Max, Routing Efficiency
+- Network Load: Saturation Indicators, Energy Proxy, Scalability Factor
+
 Usage:
     python run_parallel.py                    # Run with defaults
     python run_parallel.py --packets 500      # Custom packet count
@@ -204,80 +210,13 @@ class ParallelSimulationOrchestrator:
                 self.results[topology] = {"success": False, "error": "Result file not found"}
     
     def _generate_comparison_report(self):
-        """Generate a comparison report from all results"""
+        """Generate a comprehensive comparison report from all results using standard NoC metrics"""
         
         report_file = os.path.join(self.results_dir, f"comparison_{self.timestamp}.txt")
         json_file = os.path.join(self.results_dir, f"comparison_{self.timestamp}.json")
         
-        # Text report
-        lines = []
-        lines.append("=" * 70)
-        lines.append("MULTI-TOPOLOGY SIMULATION COMPARISON REPORT")
-        lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append("=" * 70)
-        lines.append("")
-        
-        # Summary table
-        lines.append("-" * 70)
-        lines.append(f"{'Metric':<25} {'MESH':>12} {'RICOBIT':>12} {'TORUS':>12}")
-        lines.append("-" * 70)
-        
-        metrics_to_compare = [
-            ("Nodes", "nodes"),
-            ("Packets Injected", "packets_injected"),
-            ("Packets Delivered", "packets_delivered"),
-            ("Delivery Rate (%)", "delivery_rate"),
-            ("Total Cycles", "total_cycles"),
-            ("Avg Latency", "avg_latency"),
-            ("Min Latency", "min_latency"),
-            ("Max Latency", "max_latency"),
-            ("Throughput", "throughput"),
-        ]
-        
-        for display_name, key in metrics_to_compare:
-            values = []
-            for topo in ["mesh", "ricobit", "torus"]:
-                result = self.results.get(topo, {})
-                if key in ["packets_injected", "packets_delivered", "total_cycles"]:
-                    val = result.get(key, 0)
-                else:
-                    val = result.get("metrics", {}).get(key, 0)
-                
-                if isinstance(val, float):
-                    values.append(f"{val:.2f}")
-                else:
-                    values.append(str(val))
-            
-            lines.append(f"{display_name:<25} {values[0]:>12} {values[1]:>12} {values[2]:>12}")
-        
-        lines.append("-" * 70)
-        lines.append("")
-        
-        # Determine winner
-        lines.append("PERFORMANCE RANKING:")
-        
-        # Rank by throughput
-        throughputs = []
-        for topo in ["mesh", "ricobit", "torus"]:
-            t = self.results.get(topo, {}).get("metrics", {}).get("throughput", 0)
-            throughputs.append((topo, t))
-        throughputs.sort(key=lambda x: x[1], reverse=True)
-        
-        lines.append(f"  By Throughput: {' > '.join([f'{t[0]}({t[1]:.4f})' for t in throughputs])}")
-        
-        # Rank by latency (lower is better)
-        latencies = []
-        for topo in ["mesh", "ricobit", "torus"]:
-            l = self.results.get(topo, {}).get("metrics", {}).get("avg_latency", float('inf'))
-            latencies.append((topo, l))
-        latencies.sort(key=lambda x: x[1])
-        
-        lines.append(f"  By Avg Latency: {' < '.join([f'{l[0]}({l[1]:.2f})' for l in latencies])}")
-        
-        lines.append("")
-        lines.append("=" * 70)
-        
-        report_text = "\n".join(lines)
+        # Generate comprehensive text report using results dict
+        report_text = self._create_comprehensive_report()
         
         # Print to console
         print()
@@ -286,17 +225,404 @@ class ParallelSimulationOrchestrator:
         # Save text report
         with open(report_file, 'w') as f:
             f.write(report_text)
-        print(f"\nText report saved to: {report_file}")
+        print(f"\nComprehensive report saved to: {report_file}")
         
-        # Save JSON report
+        # Save JSON report with detailed metrics
         combined_results = {
             "timestamp": self.timestamp,
             "config": self.config,
-            "results": self.results
+            "results": self.results,
+            "comparison_summary": self._extract_comparison_summary()
         }
         with open(json_file, 'w') as f:
             json.dump(combined_results, f, indent=2)
         print(f"JSON report saved to: {json_file}")
+    
+    def _create_comprehensive_report(self) -> str:
+        """Create comprehensive comparison report text matching RiCoBiT paper format"""
+        topologies = ["mesh", "ricobit", "torus"]
+        lines = []
+        
+        lines.append("=" * 110)
+        lines.append("COMPREHENSIVE NETWORK TOPOLOGY COMPARISON REPORT")
+        lines.append("Based on RiCoBiT Paper Metrics and Formulas")
+        lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append("=" * 110)
+        lines.append("")
+        
+        # Configuration
+        lines.append("SIMULATION CONFIGURATION")
+        lines.append("-" * 110)
+        lines.append(f"  Packets per Topology: {self.config.get('num_packets', 'N/A')}")
+        lines.append(f"  Max Cycles: {self.config.get('max_cycles', 'N/A')}")
+        lines.append(f"  Buffer Capacity (N_b): {self.config.get('buffer_capacity', 'N/A')}")
+        lines.append(f"  Random Seed: {self.config.get('seed', 'None')}")
+        lines.append(f"  Mesh Size: {self.config.get('mesh_width', 'N/A')}×{self.config.get('mesh_height', 'N/A')}")
+        lines.append(f"  Torus Size: {self.config.get('torus_width', 'N/A')}×{self.config.get('torus_height', 'N/A')}")
+        lines.append(f"  RiCoBiT Levels: {self.config.get('ricobit_levels', 'N/A')}")
+        lines.append("")
+        
+        # ============================================================
+        # TABLE 1 STYLE: Performance Comparison Summary
+        # ============================================================
+        lines.append("TABLE 1: PERFORMANCE COMPARISON SUMMARY")
+        lines.append("=" * 110)
+        
+        col_width = 18
+        lines.append(f"{'Metric':<30} {'MESH':>{col_width}} {'TORUS':>{col_width}} {'RiCoBiT':>{col_width}}")
+        lines.append("-" * 110)
+        
+        # Extract metrics for table
+        table1_metrics = [
+            ("Number of Nodes", "nodes", ""),
+            ("Packets Injected", None, "packets_injected"),
+            ("Packets Delivered", None, "packets_delivered"),
+            ("Delivery Rate (%)", "delivery_rate", ""),
+            ("Total Cycles", None, "total_cycles"),
+            ("Overall Absorption Time", None, "overall_absorption"),
+            ("Max Absorption Time", "max_latency", ""),
+            ("Average Absorption Time", "avg_latency", ""),
+        ]
+        
+        for display_name, metric_key, result_key in table1_metrics:
+            row = f"  {display_name:<28}"
+            for topo in ["mesh", "torus", "ricobit"]:
+                result = self.results.get(topo, {})
+                if result_key:
+                    if result_key == "overall_absorption":
+                        # Sum of all latencies
+                        detailed = result.get("detailed_metrics", {})
+                        val = detailed.get("absorption_metrics", {}).get("overall_absorption_time", 0)
+                    else:
+                        val = result.get(result_key, 0)
+                elif metric_key:
+                    val = result.get("metrics", {}).get(metric_key, 0)
+                else:
+                    val = 0
+                
+                if isinstance(val, float):
+                    row += f"{val:>{col_width}.2f}"
+                else:
+                    row += f"{val:>{col_width}}"
+            lines.append(row)
+        
+        lines.append("-" * 110)
+        lines.append("")
+        
+        # ============================================================
+        # TABLE 3 STYLE: Absorption Time Comparison
+        # ============================================================
+        lines.append("TABLE 2: ABSORPTION TIME COMPARISON (cycles)")
+        lines.append("=" * 110)
+        lines.append(f"{'Topology':<15} {'Overall Absorption':>{col_width}} {'Maximum Time':>{col_width}} {'Average Time':>{col_width}}")
+        lines.append("-" * 110)
+        
+        for topo in topologies:
+            result = self.results.get(topo, {})
+            detailed = result.get("detailed_metrics", {})
+            
+            overall = detailed.get("absorption_metrics", {}).get("overall_absorption_time", 0)
+            max_time = result.get("metrics", {}).get("max_latency", 0)
+            avg_time = result.get("metrics", {}).get("avg_latency", 0)
+            
+            lines.append(f"  {topo.upper():<13} {overall:>{col_width}} {max_time:>{col_width}} {avg_time:>{col_width}.2f}")
+        
+        lines.append("-" * 110)
+        lines.append("")
+        
+        # ============================================================
+        # TABLE 3: THEORETICAL BOUNDS vs ACTUAL
+        # ============================================================
+        lines.append("TABLE 3: THEORETICAL BOUNDS vs ACTUAL PERFORMANCE")
+        lines.append("=" * 110)
+        lines.append(f"{'Metric':<35} {'MESH':>{col_width}} {'TORUS':>{col_width}} {'RiCoBiT':>{col_width}}")
+        lines.append("-" * 110)
+        
+        # Get theoretical bounds from detailed_metrics
+        def get_theoretical(result, key):
+            return result.get("detailed_metrics", {}).get("theoretical_bounds", {}).get(key, 0)
+        
+        def get_absorption(result, key):
+            return result.get("detailed_metrics", {}).get("absorption_metrics", {}).get(key, 0)
+        
+        theoretical_metrics = [
+            ("Theoretical Max Hops H_c(Max)", lambda r: get_theoretical(r, "max_hop_count")),
+            ("Actual Max Hops (observed)", lambda r: r.get("metrics", {}).get("max_hops", 0)),
+            ("Theoretical Avg Hops H_c(Avg)", lambda r: get_theoretical(r, "avg_hop_count")),
+            ("Actual Avg Hops (observed)", lambda r: r.get("metrics", {}).get("avg_hops", 0)),
+            ("Latency Lower Bound L_p(min)", lambda r: get_theoretical(r, "latency_lower_bound")),
+            ("Actual Min Latency", lambda r: r.get("metrics", {}).get("min_latency", 0)),
+            ("Latency Upper Bound L_p(max)", lambda r: get_theoretical(r, "latency_upper_bound")),
+            ("Actual Max Latency", lambda r: r.get("metrics", {}).get("max_latency", 0)),
+            ("Throughput Upper τ_p(max)", lambda r: get_theoretical(r, "throughput_upper_bound")),
+            ("Actual Throughput", lambda r: r.get("metrics", {}).get("throughput", 0)),
+        ]
+        
+        for display_name, getter in theoretical_metrics:
+            row = f"  {display_name:<33}"
+            for topo in ["mesh", "torus", "ricobit"]:
+                result = self.results.get(topo, {})
+                val = getter(result)
+                
+                if isinstance(val, float):
+                    if val < 0.01 and val > 0:
+                        row += f"{val:>{col_width}.6f}"
+                    else:
+                        row += f"{val:>{col_width}.4f}"
+                else:
+                    row += f"{val:>{col_width}}"
+            lines.append(row)
+        
+        lines.append("-" * 110)
+        lines.append("")
+        
+        # ============================================================
+        # DETAILED LATENCY METRICS
+        # ============================================================
+        lines.append("TABLE 4: DETAILED LATENCY METRICS (cycles)")
+        lines.append("=" * 110)
+        lines.append(f"{'Metric':<30} {'MESH':>{col_width}} {'TORUS':>{col_width}} {'RiCoBiT':>{col_width}} {'Winner':>{col_width}}")
+        lines.append("-" * 110)
+        
+        latency_metrics = [
+            ("Average Latency", "avg_latency", "lower"),
+            ("Minimum Latency", "min_latency", "lower"),
+            ("Maximum Latency", "max_latency", "lower"),
+            ("Median Latency", "median_latency", "lower"),
+            ("Standard Deviation", "latency_std_dev", "lower"),
+            ("Jitter (Max-Min)", "jitter", "lower"),
+            ("90th Percentile", "percentile_90", "lower"),
+            ("95th Percentile", "percentile_95", "lower"),
+            ("99th Percentile", "percentile_99", "lower"),
+        ]
+        
+        for display_name, key, direction in latency_metrics:
+            values = {}
+            row = f"  {display_name:<28}"
+            for topo in ["mesh", "torus", "ricobit"]:
+                result = self.results.get(topo, {})
+                val = result.get("metrics", {}).get(key, 0)
+                values[topo] = val
+                if isinstance(val, float):
+                    row += f"{val:>{col_width}.2f}"
+                else:
+                    row += f"{val:>{col_width}}"
+            
+            # Determine winner
+            valid = {k: v for k, v in values.items() if v and v > 0}
+            if valid:
+                winner = min(valid.items(), key=lambda x: x[1])[0] if direction == "lower" else max(valid.items(), key=lambda x: x[1])[0]
+                row += f"{winner:>{col_width}}"
+            else:
+                row += f"{'-':>{col_width}}"
+            lines.append(row)
+        
+        lines.append("-" * 110)
+        lines.append("")
+        
+        # ============================================================
+        # THROUGHPUT METRICS
+        # ============================================================
+        lines.append("TABLE 5: THROUGHPUT METRICS")
+        lines.append("=" * 110)
+        lines.append(f"{'Metric':<30} {'MESH':>{col_width}} {'TORUS':>{col_width}} {'RiCoBiT':>{col_width}} {'Winner':>{col_width}}")
+        lines.append("-" * 110)
+        
+        throughput_metrics = [
+            ("Throughput (pkt/cycle)", "throughput", "higher"),
+            ("Normalized Throughput", "throughput_normalized", "higher"),
+            ("Effective Bandwidth", "effective_bandwidth", "higher"),
+            ("Accepted Traffic", "accepted_traffic", "higher"),
+            ("Scalability Factor", "scalability_factor", "higher"),
+        ]
+        
+        for display_name, key, direction in throughput_metrics:
+            values = {}
+            row = f"  {display_name:<28}"
+            for topo in ["mesh", "torus", "ricobit"]:
+                result = self.results.get(topo, {})
+                val = result.get("metrics", {}).get(key, 0)
+                values[topo] = val
+                if isinstance(val, float):
+                    row += f"{val:>{col_width}.6f}"
+                else:
+                    row += f"{val:>{col_width}}"
+            
+            valid = {k: v for k, v in values.items() if v and v > 0}
+            if valid:
+                winner = max(valid.items(), key=lambda x: x[1])[0]
+                row += f"{winner:>{col_width}}"
+            else:
+                row += f"{'-':>{col_width}}"
+            lines.append(row)
+        
+        lines.append("-" * 110)
+        lines.append("")
+        
+        # ============================================================
+        # HOP COUNT METRICS
+        # ============================================================
+        lines.append("TABLE 6: HOP COUNT AND ROUTING METRICS")
+        lines.append("=" * 110)
+        lines.append(f"{'Metric':<30} {'MESH':>{col_width}} {'TORUS':>{col_width}} {'RiCoBiT':>{col_width}} {'Winner':>{col_width}}")
+        lines.append("-" * 110)
+        
+        hop_metrics = [
+            ("Average Hop Count", "avg_hops", "lower"),
+            ("Minimum Hop Count", "min_hops", "lower"),
+            ("Maximum Hop Count", "max_hops", "lower"),
+            ("Routing Efficiency", "routing_efficiency", "higher"),
+            ("Latency Per Hop", "latency_per_hop", "lower"),
+            ("Energy Proxy (hops/pkt)", "energy_proxy", "lower"),
+        ]
+        
+        for display_name, key, direction in hop_metrics:
+            values = {}
+            row = f"  {display_name:<28}"
+            for topo in ["mesh", "torus", "ricobit"]:
+                result = self.results.get(topo, {})
+                val = result.get("metrics", {}).get(key, 0)
+                values[topo] = val
+                if isinstance(val, float):
+                    row += f"{val:>{col_width}.4f}"
+                else:
+                    row += f"{val:>{col_width}}"
+            
+            valid = {k: v for k, v in values.items() if v and v > 0}
+            if valid:
+                if direction == "lower":
+                    winner = min(valid.items(), key=lambda x: x[1])[0]
+                else:
+                    winner = max(valid.items(), key=lambda x: x[1])[0]
+                row += f"{winner:>{col_width}}"
+            else:
+                row += f"{'-':>{col_width}}"
+            lines.append(row)
+        
+        lines.append("-" * 110)
+        lines.append("")
+        
+        # ============================================================
+        # OVERALL RANKING
+        # ============================================================
+        lines.append("=" * 110)
+        lines.append("OVERALL PERFORMANCE RANKING")
+        lines.append("=" * 110)
+        
+        # Calculate comprehensive scores
+        scores = {topo: 0 for topo in topologies}
+        all_metrics = [
+            ("avg_latency", "lower"), ("throughput", "higher"), 
+            ("delivery_rate", "higher"), ("jitter", "lower"),
+            ("percentile_95", "lower"), ("avg_hops", "lower"),
+            ("routing_efficiency", "higher"), ("scalability_factor", "higher"),
+        ]
+        
+        for key, direction in all_metrics:
+            values = {}
+            for topo in topologies:
+                val = self.results.get(topo, {}).get("metrics", {}).get(key)
+                if val is not None and val > 0:
+                    values[topo] = val
+            
+            if values:
+                if direction == "lower":
+                    ranked = sorted(values.items(), key=lambda x: x[1])
+                else:
+                    ranked = sorted(values.items(), key=lambda x: x[1], reverse=True)
+                
+                for i, (topo, _) in enumerate(ranked):
+                    scores[topo] += (3 - i)
+        
+        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        
+        for i, (topo, score) in enumerate(sorted_scores):
+            medal = ["🥇", "🥈", "🥉"][i] if i < 3 else "  "
+            bar = "█" * (score // 2) + "░" * ((24 - score) // 2)
+            lines.append(f"  {medal} {topo.upper():12}: {bar} {score:2d} points")
+        
+        lines.append("")
+        winner = sorted_scores[0][0]
+        lines.append(f"  🏆 BEST OVERALL TOPOLOGY: {winner.upper()}")
+        lines.append("")
+        
+        # ============================================================
+        # FORMULAS REFERENCE
+        # ============================================================
+        lines.append("=" * 110)
+        lines.append("THEORETICAL FORMULAS (from RiCoBiT Paper)")
+        lines.append("=" * 110)
+        lines.append("")
+        lines.append("  Maximum Hop Count:")
+        lines.append("    Mesh:    H_c(Max) = (width - 1) + (height - 1)")
+        lines.append("    Torus:   H_c(Max) = floor(width/2) + floor(height/2)")
+        lines.append("    RiCoBiT: H_c(Max) = 2 × log₂(N_r + 2) - 4")
+        lines.append("")
+        lines.append("  Latency Bounds:")
+        lines.append("    Lower: L_p(min) = 2 × p × H_c(Max) + p")
+        lines.append("    Upper: L_p(max) = {T_a(Max) + 2P} × (N_b + 2) × H_c(Max) + p")
+        lines.append("")
+        lines.append("  Throughput Bounds:")
+        lines.append("    Lower: τ_p(min) = 1 / L_p(max)")
+        lines.append("    Upper: τ_p(max) = 1 / L_p(min)")
+        lines.append("")
+        lines.append("  Where: p = processing time, N_b = buffer capacity,")
+        lines.append("         T_a = arbitration time, P = pipeline stages")
+        lines.append("")
+        lines.append("=" * 110)
+        
+        return "\n".join(lines)
+    
+    def _extract_comparison_summary(self) -> dict:
+        """Extract comparison summary with rankings for each metric"""
+        summary = {
+            "rankings": {},
+            "best_overall": None,
+            "metric_winners": {}
+        }
+        
+        topologies = ["mesh", "ricobit", "torus"]
+        
+        # Metrics where lower is better
+        lower_better = ["avg_latency", "min_latency", "max_latency", "median_latency",
+                       "latency_std_dev", "jitter", "percentile_90", "percentile_95", 
+                       "percentile_99", "latency_per_hop", "energy_proxy", "network_load"]
+        
+        # Metrics where higher is better
+        higher_better = ["delivery_rate", "throughput", "throughput_normalized",
+                        "effective_bandwidth", "routing_efficiency", "scalability_factor"]
+        
+        scores = {topo: 0 for topo in topologies}
+        
+        for metric in lower_better + higher_better:
+            values = {}
+            for topo in topologies:
+                result = self.results.get(topo, {})
+                val = result.get("metrics", {}).get(metric, None)
+                if val is not None and val != 0:
+                    values[topo] = val
+            
+            if values:
+                if metric in lower_better:
+                    # Lower is better - sort ascending
+                    ranked = sorted(values.items(), key=lambda x: x[1])
+                else:
+                    # Higher is better - sort descending
+                    ranked = sorted(values.items(), key=lambda x: x[1], reverse=True)
+                
+                summary["rankings"][metric] = [t[0] for t in ranked]
+                summary["metric_winners"][metric] = ranked[0][0] if ranked else None
+                
+                # Award points: 1st=3, 2nd=2, 3rd=1
+                for i, (topo, _) in enumerate(ranked):
+                    scores[topo] += (3 - i)
+        
+        # Determine overall best
+        best_topo = max(scores.items(), key=lambda x: x[1])
+        summary["best_overall"] = best_topo[0]
+        summary["total_scores"] = scores
+        
+        return summary
 
 
 def main():

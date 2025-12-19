@@ -323,6 +323,7 @@ let nodePanelAutoTracking = false;
 let autoNodeDetailsPreference = false;
 let routePreview = null;
 let lastRoutePayload = null;
+let lastAnimationTimer = 0;  // Store the final timer value from last animation
 let multiRunState = null;
 let detailedLogEntries = [];
 let detailedLogTitle = 'Detailed log';
@@ -2981,13 +2982,16 @@ function updateParallelRouteProgress(statuses = [], contexts = []) {
                 signalStates: { req: 'sleep', ack: 'sleep', data: 'sleep' },
                 transferText: isNmMode ? 'Route delivered' : 'Packet delivered',
                 progressPercent: 100,
-                timer: 0,
+                timer: multiRunState?.finalTimer ?? 0,
             };
         }
 
         completedSet.add(routeIndex);
+        // Preserve the timer value from the status or use stored final timer
+        const statusTimer = completedStatus.timer ?? multiRunState?.finalTimer ?? 0;
         multiRunState.completedStatuses[routeIndex] = {
             ...completedStatus,
+            timer: statusTimer,
             signalStates: {
                 ...(completedStatus.signalStates || {}),
             },
@@ -3074,6 +3078,8 @@ function buildCompletedStatusFromPayload(payload) {
             || payload?.destination
             || startNode;
     const transferText = multiRunState?.mode === 'nm' ? 'Route delivered' : 'Packet delivered';
+    // Use stored final timer if available, otherwise default to 0
+    const finalTimer = multiRunState?.finalTimer ?? 0;
 
     return {
         hopText: totalHops > 0 ? `${totalHops} / ${totalHops}` : '0 / 0',
@@ -3086,7 +3092,7 @@ function buildCompletedStatusFromPayload(payload) {
         signalStates: { req: 'sleep', ack: 'sleep', data: 'sleep' },
         transferText,
         progressPercent: 100,
-        timer: 0,
+        timer: finalTimer,
     };
 }
 
@@ -4539,6 +4545,20 @@ class ParallelRouteController {
 
     getActiveEntries() {
         return this.activeEntries.slice();
+    }
+
+    getAllEntries() {
+        return this.allEntries.slice();
+    }
+
+    getMaxElapsedTime() {
+        let maxElapsed = 0;
+        this.allEntries.forEach((entry) => {
+            if (entry && entry.animation && typeof entry.animation.elapsedMs === 'number') {
+                maxElapsed = Math.max(maxElapsed, entry.animation.elapsedMs);
+            }
+        });
+        return Math.round(maxElapsed / 1000);
     }
 
     resolveQueueKey(payload, index) {
@@ -7457,20 +7477,31 @@ function startAnimation(payload, options = {}) {
         animationState.update(timestamp);
 
         if (animationState.mode === 'parallel' || animationState.mode === 'parallelSources' || animationState.mode === 'nm') {
+            // Use all entries (including completed) to get accurate timer
+            const allEntries = typeof animationState.getAllEntries === 'function'
+                ? animationState.getAllEntries()
+                : typeof animationState.getActiveEntries === 'function'
+                    ? animationState.getActiveEntries()
+                    : Array.isArray(animationState.animations)
+                        ? animationState.animations.map((animation, index) => ({ animation, routeIndex: index }))
+                        : [];
             const activeEntries = typeof animationState.getActiveEntries === 'function'
                 ? animationState.getActiveEntries()
-                : Array.isArray(animationState.animations)
-                    ? animationState.animations.map((animation, index) => ({ animation, routeIndex: index }))
-                    : [];
-            const animations = activeEntries.map((entry) => entry.animation).filter(Boolean);
-            const statuses = animations.map((animation) => animation.currentStatus());
+                : allEntries;
+            const allAnimations = allEntries.map((entry) => entry.animation).filter(Boolean);
+            const statuses = allAnimations.map((animation) => animation.currentStatus());
             animationState.latestStatuses = statuses;
+            // Get max elapsed time from controller for accurate timer
+            const maxTimer = typeof animationState.getMaxElapsedTime === 'function'
+                ? animationState.getMaxElapsedTime()
+                : null;
             const aggregate = aggregateParallelStatuses(statuses, {
                 mode: multiRunState?.mode || null,
                 routeSummary: multiRunState?.routeQueueSummary || null,
+                timerOverride: maxTimer,
             });
             updateStatusBar(aggregate);
-            statuses.forEach((status, index) => updateNodeRuntimeFromStatus(status, animations[index]));
+            statuses.forEach((status, index) => updateNodeRuntimeFromStatus(status, allAnimations[index]));
             updateParallelRouteProgress(statuses, activeEntries);
         } else {
             const status = animationState.currentStatus();
@@ -7518,6 +7549,15 @@ function startAnimation(payload, options = {}) {
 
             hudStatus.textContent = completionMessage;
             highlightFlowCard(flowCardElements.length - 1);
+            // Get final timer from animation controller or DOM
+            let finalTimerValue = typeof animationState.getMaxElapsedTime === 'function'
+                ? animationState.getMaxElapsedTime()
+                : parseInt(statusElements.timerValue.textContent.replace(/[^0-9]/g, ''), 10) || 0;
+            // Store final timer value globally and in multiRunState for later reference
+            lastAnimationTimer = finalTimerValue;
+            if (multiRunState) {
+                multiRunState.finalTimer = finalTimerValue;
+            }
             const completedStatus = {
                 phaseKey: 'completed',
                 phaseLabel: 'Completed',
@@ -7527,7 +7567,7 @@ function startAnimation(payload, options = {}) {
                 progressPercent: 100,
                 hopText: statusElements.hopValue.textContent,
                 nodesText: statusElements.hopNodes.textContent,
-                timer: parseInt(statusElements.timerValue.textContent.replace(/[^0-9]/g, ''), 10) || 0,
+                timer: finalTimerValue,
             };
             updateStatusBar(completedStatus);
             if (Array.isArray(opts.parallelPayloads) && opts.parallelPayloads.length) {
@@ -7559,13 +7599,31 @@ function startAnimation(payload, options = {}) {
             }
             if (multiRunState && Array.isArray(multiRunState.previewRoutes)) {
                 if (multiRunState.mode === 'parallel' || multiRunState.mode === 'parallelSources' || multiRunState.mode === 'nm') {
-                    multiRunState.previewRoutes.forEach((preview) => {
+                    // Mark all routes as completed in the completed Set
+                    if (!(multiRunState.completed instanceof Set)) {
+                        multiRunState.completed = new Set();
+                    }
+                    multiRunState.previewRoutes.forEach((preview, index) => {
                         if (!preview) return;
                         preview.renderStyle = 'completed';
                         if (typeof preview.strokeOpacity !== 'number' || preview.strokeOpacity < 0.85) {
                             preview.strokeOpacity = 0.85;
                         }
+                        // Add route index to completed set
+                        multiRunState.completed.add(index);
+                        // Store completed status for each route
+                        if (!Array.isArray(multiRunState.completedStatuses)) {
+                            multiRunState.completedStatuses = [];
+                        }
+                        if (!multiRunState.completedStatuses[index]) {
+                            multiRunState.completedStatuses[index] = {
+                                ...completedStatus,
+                                timer: finalTimerValue,
+                            };
+                        }
                     });
+                    // Refresh the sidebar to show completed status
+                    renderMultiRouteList();
                 }
             }
             const completedSignature = routePathSignature(payload?.path);
@@ -7650,6 +7708,7 @@ function resetSimulation() {
     setNodePanelAutoTracking(autoNodeDetailsPreference);
     routePreview = null;
     lastRoutePayload = null;
+    lastAnimationTimer = 0;  // Reset stored timer
     updateAnimateButton({ disabled: true, busy: false });
     resetMultiRunState();
     if (selectedNodeId) {

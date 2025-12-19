@@ -2,6 +2,8 @@
 """
 Standalone Torus Topology Simulation Runner
 Runs torus simulation and outputs results to a JSON file
+
+Enhanced with comprehensive network metrics following standard NoC formulas.
 """
 
 import sys
@@ -9,6 +11,7 @@ import os
 import json
 import random
 import argparse
+import time
 from datetime import datetime
 
 # Add parent directory to path
@@ -17,10 +20,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from topology.torus.enhanced_torus_topology import EnhancedTorusTopology
 from simulation.torus.simulator import Simulator
 from core.torus.packet import Packet
+from unified_harness.network_metrics import NetworkMetrics, PacketData, calculate_torus_distance
 
 
 def run_torus_simulation(config: dict) -> dict:
-    """Run torus topology simulation"""
+    """Run torus topology simulation with comprehensive metrics"""
     
     print("=" * 60)
     print("TORUS TOPOLOGY SIMULATION")
@@ -34,8 +38,11 @@ def run_torus_simulation(config: dict) -> dict:
         "packets_delivered": 0,
         "total_cycles": 0,
         "packet_log": [],
-        "metrics": {}
+        "metrics": {},
+        "detailed_metrics": {}
     }
+    
+    start_time = time.time()
     
     try:
         # Set random seed if provided
@@ -64,13 +71,28 @@ def run_torus_simulation(config: dict) -> dict:
         )
         
         node_addresses = list(topology.nodes.keys())
+        total_nodes = len(node_addresses)
+        
+        print(f"  Total nodes: {total_nodes}")
+        
+        # Initialize comprehensive metrics
+        metrics = NetworkMetrics(
+            topology_type="torus",
+            total_nodes=total_nodes,
+            grid_width=width,
+            grid_height=height,
+            buffer_capacity=buffer_capacity,
+            max_cycles=max_cycles
+        )
         
         # Create simulator
         simulator = Simulator(topology)
         
-        # Generate packets
+        # Generate packets with tracking data
         print(f"\n--- Packet Source -> Destination Log (TORUS) ---")
         packets = []
+        packet_map = {}  # Map packet_id to PacketData
+        
         for i in range(num_packets):
             src = random.choice(node_addresses)
             dst = random.choice([addr for addr in node_addresses if addr != src])
@@ -83,9 +105,22 @@ def run_torus_simulation(config: dict) -> dict:
             )
             packets.append(packet)
             
+            # Calculate torus distance (optimal path with wraparound)
+            optimal_dist = calculate_torus_distance(src, dst, width, height)
+            
+            packet_data = PacketData(
+                packet_id=f"pkt_{i}",
+                source=src,
+                destination=dst,
+                injection_cycle=0,
+                manhattan_distance=optimal_dist  # Optimal torus distance
+            )
+            metrics.packets.append(packet_data)
+            packet_map[f"pkt_{i}"] = packet_data
+            
             log_entry = {"packet_id": f"pkt_{i}", "src": str(src), "dst": str(dst)}
             result["packet_log"].append(log_entry)
-            print(f"  Packet {i+1}: SRC={src} -> DST={dst}")
+            print(f"  Packet {i+1}: SRC={src} -> DST={dst} (optimal dist: {optimal_dist})")
         
         print(f"--- End of Packet Log (TORUS) - Total: {len(packets)} packets ---\n")
         
@@ -113,41 +148,88 @@ def run_torus_simulation(config: dict) -> dict:
             
             # Check if all delivered
             if delivered >= len(packets):
+                metrics.simulation_completed = True
                 break
             
             # Progress logging
-            if cycles % 100 == 0:
+            if cycles % 1000 == 0:
                 print(f"  Cycle {cycles}: Delivered {delivered}/{len(packets)}")
         
         # Collect results
         all_consumed = simulator.get_all_consumed_packets()
         
-        # Calculate latencies
-        latencies = []
+        # Update packet metrics with delivery information
         for pkt in all_consumed:
-            if hasattr(pkt, 'start_timer') and hasattr(pkt, 'end_timer'):
-                if pkt.start_timer is not None and pkt.end_timer is not None:
-                    latencies.append(pkt.end_timer - pkt.start_timer)
+            pkt_id = getattr(pkt, 'data', None)  # In torus, data contains pkt_id
+            if pkt_id in packet_map:
+                packet_data = packet_map[pkt_id]
+                packet_data.delivered = True
+                
+                # Get timing information
+                if hasattr(pkt, 'start_timer') and hasattr(pkt, 'end_timer'):
+                    if pkt.start_timer is not None:
+                        packet_data.injection_cycle = pkt.start_timer
+                    if pkt.end_timer is not None:
+                        packet_data.delivery_cycle = pkt.end_timer
+                
+                # Get hop count if available
+                if hasattr(pkt, 'hop_count'):
+                    packet_data.hop_count = pkt.hop_count
+        
+        # Finalize metrics
+        metrics.total_simulation_cycles = cycles
+        metrics.execution_time_seconds = time.time() - start_time
         
         result["total_cycles"] = cycles
         result["packets_delivered"] = len(all_consumed)
         result["success"] = True
+        
+        # Get comprehensive metrics
+        detailed = metrics.to_dict()
+        result["detailed_metrics"] = detailed
+        
+        # Also provide legacy format for backward compatibility
         result["metrics"] = {
-            "nodes": len(topology.nodes),
-            "avg_latency": sum(latencies) / len(latencies) if latencies else 0,
-            "min_latency": min(latencies) if latencies else 0,
-            "max_latency": max(latencies) if latencies else 0,
-            "throughput": len(all_consumed) / cycles if cycles > 0 else 0,
-            "delivery_rate": (len(all_consumed) / len(packets) * 100) if packets else 0
+            "nodes": metrics.total_nodes,
+            "delivery_rate": metrics.delivery_rate,
+            "avg_latency": metrics.avg_latency,
+            "min_latency": metrics.min_latency,
+            "max_latency": metrics.max_latency,
+            "median_latency": metrics.median_latency,
+            "latency_std_dev": metrics.latency_std_dev,
+            "jitter": metrics.jitter,
+            "percentile_90": metrics.latency_percentile_90,
+            "percentile_95": metrics.latency_percentile_95,
+            "percentile_99": metrics.latency_percentile_99,
+            "throughput": metrics.throughput_packets_per_cycle,
+            "throughput_normalized": metrics.throughput_packets_per_node_per_cycle,
+            "effective_bandwidth": metrics.effective_bandwidth,
+            "accepted_traffic": metrics.accepted_traffic,
+            "avg_hops": metrics.avg_hop_count,
+            "min_hops": metrics.min_hop_count,
+            "max_hops": metrics.max_hop_count,
+            "routing_efficiency": metrics.avg_routing_efficiency,
+            "latency_per_hop": metrics.latency_per_hop,
+            "energy_proxy": metrics.energy_consumption_proxy,
+            "network_load": metrics.network_load,
+            "saturation_state": metrics.saturation_indicator,
+            "scalability_factor": metrics.scalability_factor,
+            "network_diameter": metrics.network_diameter,
         }
         
         print()
         print("=" * 60)
         print(f"TORUS SIMULATION COMPLETE")
-        print(f"  Packets Delivered: {result['packets_delivered']}/{result['packets_injected']}")
+        print(f"  Packets Delivered: {result['packets_delivered']}/{result['packets_injected']} ({metrics.delivery_rate:.1f}%)")
         print(f"  Total Cycles: {result['total_cycles']}")
-        print(f"  Avg Latency: {result['metrics']['avg_latency']:.2f}")
-        print(f"  Throughput: {result['metrics']['throughput']:.4f} packets/cycle")
+        print(f"  Network State: {metrics.saturation_indicator}")
+        print(f"  Avg Latency: {metrics.avg_latency:.2f} cycles")
+        print(f"  Median Latency: {metrics.median_latency:.2f} cycles")
+        print(f"  Latency Jitter: {metrics.jitter} cycles")
+        print(f"  Throughput: {metrics.throughput_packets_per_cycle:.6f} packets/cycle")
+        print(f"  Avg Hops: {metrics.avg_hop_count:.2f}")
+        print(f"  Execution Time: {metrics.execution_time_seconds:.3f}s")
+        print("=" * 60)
         print("=" * 60)
         
     except Exception as e:
