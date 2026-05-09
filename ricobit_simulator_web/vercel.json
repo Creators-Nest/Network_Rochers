@@ -1,14 +1,14 @@
 {
   "version": 2,
   "functions": {
-    "ricobit_simulator_web/api/index.py": {
+    "api/index.py": {
       "runtime": "@vercel/python@6.38.0"
     }
   },
   "rewrites": [
     {
       "source": "/(.*)",
-      "destination": "/ricobit_simulator_web/api/index.py"
+      "destination": "/api/index.py"
     }
   ]
 }
