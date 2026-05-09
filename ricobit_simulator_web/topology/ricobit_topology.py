@@ -1,6 +1,6 @@
 from collections import deque
-from ..core.node import Node
-from ..routing.shortest_path_router import ShortestPathRouter
+from core.node import Node
+from routing.shortest_path_router import ShortestPathRouter
 
 class RiCoBiT_Topology:
     """
