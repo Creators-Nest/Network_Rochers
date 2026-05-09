@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "functions": {
+    "ricobit_simulator_web/api/index.py": {
+      "runtime": "python3.11"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/ricobit_simulator_web/api/index.py"
+    }
+  ]
+}
