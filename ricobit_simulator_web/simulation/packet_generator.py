@@ -1,6 +1,6 @@
 import random
 
-from ..core.packet import Packet
+from core.packet import Packet
 
 class PacketGenerator:
     """

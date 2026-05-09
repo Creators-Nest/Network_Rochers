@@ -1,125 +1,124 @@
-<<<<<<< HEAD
-# NoC Simulator Framework
+# RiCoBiT Simulator Web
 
-Network-on-Chip (NoC) Simulation Framework for visualizing and analyzing packet transfer across different topologies.
+A web-based interactive simulator and visualizer for the RiCoBiT (Recursive Combination of Binary Trees) network topology, designed for on-chip network research and education.
 
-## Supported Topologies
+## Overview
 
-1. **Mesh** - Grid-based topology with vertical and horizontal connections
-2. **Torus** - Mesh topology with wrap-around connections
-3. **RiCoBiT** - Ring-Connected Bi-directional Topology with diagonal connections
+RiCoBiT Simulator Web provides a comprehensive platform to simulate, visualize, and analyze packet routing in RiCoBiT topologies. This topology combines ring connections within levels and tree connections between levels to create an efficient hierarchical network structure.
+
+The simulator implements shortest-path routing using BFS (Breadth-First Search) to guarantee optimal routing decisions, making it suitable for studying network-on-chip (NoC) performance characteristics.
+
+## Features
+
+- **Interactive Web Interface**: Real-time visualization of topology and packet routing
+- **Dynamic Simulation**: Step-by-step packet injection and routing simulation
+- **Shortest Path Routing**: BFS-based routing algorithm ensuring optimal paths
+- **Traffic Generation**: Support for uniform random and longest-neighbor-first traffic patterns
+- **Topology Exploration**: Configurable RiCoBiT topology with variable levels
+- **Performance Analysis**: Distance calculations and routing statistics
+
+## Architecture
+
+The simulator is built with a modular architecture:
+
+- **Core**: Fundamental components (Nodes, Interfaces, Packets, Buffers)
+- **Topology**: RiCoBiT topology generation and management
+- **Routing**: Shortest-path routing algorithm implementation
+- **Simulation**: Packet generation and simulation coordination
+- **Webapp**: Flask-based web interface for visualization
+
+## Installation
+
+### Prerequisites
+
+- Python 3.8 or higher
+- pip package manager
+
+### Setup
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/Creators-Nest/Network_Rochers.git
+   cd Network_Rochers/ricobit_simulator_web
+   ```
+
+2. Create a virtual environment (recommended):
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+
+3. Install dependencies:
+   ```bash
+   pip install flask
+   ```
+
+## Usage
+
+### Running the Web Application
+
+Start the Flask development server:
+
+```bash
+python -m flask --app ricobit_simulator_web.webapp:create_app run --debug
+```
+
+The application will be available at `http://localhost:5000`
+
+### Configuration
+
+The topology size can be configured by modifying the `num_levels` parameter in the `AppState` class within `webapp/app.py`. Default is 5 levels.
 
 ## Project Structure
 
 ```
-Network_Rochers/
-├── src/
-│   ├── core/              # Core components (Node, Packet, Buffer, Link)
-│   ├── routing/           # Routing algorithms
-│   ├── topologies/        # Topology implementations
-│   │   ├── mesh/
-│   │   ├── torus/
-│   │   └── ricobit/
-│   ├── simulation/        # Simulation engine
-│   ├── visualization/     # Rendering and animation
-│   ├── gui/              # User interface
-│   └── utils/            # Utilities
-├── examples/             # Example simulations
-├── data/                 # Configuration files
-│   └── configs/
-└── output/              # Simulation results
+ricobit_simulator_web/
+├── core/                    # Core network components
+│   ├── buffers.py          # Circular buffer implementation
+│   ├── interface.py        # Node interface with handshake logic
+│   ├── node.py             # Node implementation
+│   └── packet.py           # Packet data structure
+├── routing/                 # Routing algorithms
+│   └── shortest_path_router.py  # BFS-based shortest path routing
+├── simulation/              # Simulation components
+│   ├── packet_generator.py  # Traffic pattern generation
+│   └── simulator.py         # Simulation coordinator
+├── topology/                # Topology generation
+│   └── ricobit_topology.py  # RiCoBiT topology implementation
+├── webapp/                  # Web interface
+│   ├── app.py              # Flask application
+│   ├── static/             # CSS and JavaScript assets
+│   └── templates/          # HTML templates
+├── __init__.py             # Package initialization
+└── README.md               # This file
 ```
 
-## Features
+## API Endpoints
 
-- **Visual Simulation**: Real-time visualization of packet transfer
-- **Multiple Topologies**: Compare Mesh, Torus, and RiCoBiT architectures
-- **Performance Metrics**: Track latency, throughput, and congestion
-- **Path Tracking**: Visualize packet routes through the network
-- **Interactive GUI**: Configure and control simulations
+- `GET /`: Main simulator interface
+- `POST /api/initialize`: Initialize topology with specified levels
+- `POST /api/simulate`: Run simulation steps
+- `GET /api/state`: Get current simulation state
+- `POST /api/reset`: Reset simulation
 
-## Getting Started
+## Contributing
 
-1. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-2. Run example simulations:
-   ```bash
-   python examples/basic_mesh_simulation.py
-   ```
+## License
 
-## Authors
+This project is licensed under the MIT License - see the LICENSE file in the root directory for details.
 
-Network_Rochers Team - REVA University
-=======
-Repository contianing intial working prototypes of the 4 Network On Chip Topologies:
-* Mesh (Handeled by Giridharan and Akarsh)
-* Torus (Handeled by David and Darshan)
-* RiCoBiT (Handeled By Akarsh and Darshan)
-* Adaptive -RiCoBiT (Joint Contribution)
->>>>>>> 48be702f2bf683c3cde44e9ada36cc1a40d43dc6
+## Acknowledgments
 
+- Based on RiCoBiT topology research papers
+- Built with Flask web framework
+- Uses modern web technologies for interactive visualization
 
+## Contact
 
-scripts : 
-1.python topology_metrics.py 
-
-
-TABLE I.     MAX HOP VS NUMBER OF NODES
-
-    Number |              Max Hop Count              
-  of Nodes |         Mesh        Torus      RiCoBiT
--------------------------------------------------------
-         4 |         2.00         2.00         1.17
-         8 |         3.66         2.83         2.64
-        16 |         6.00         4.00         4.34
-        32 |         9.31         5.66         6.17
-        64 |        14.00         8.00         8.09
-       128 |        20.63        11.31        10.04
-       256 |        30.00        16.00        12.02
-       512 |        43.25        22.63        14.01
-      1024 |        62.00        32.00        16.01
-      2048 |        88.51        45.25        18.00
-
-TABLE II.    AVERAGE HOP VS NUMBER OF NODES
-
-    Number |            Average Hop Count            
-  of Nodes |         Mesh        Torus      RiCoBiT
--------------------------------------------------------
-         4 |         1.00         1.00         1.01
-         8 |         1.75         1.50         1.29
-        16 |         2.50         2.00         2.01
-        32 |         3.88         3.00         3.00
-        64 |         5.25         4.00         4.27
-       128 |         7.94         6.00         5.78
-       256 |        10.62         8.00         7.46
-       512 |        15.97        12.00         9.27
-      1024 |        21.31        16.00        11.15
-      2048 |        31.98        24.00        13.09
-
-
-2. Python run_all_simulations.sh
-
-═══════════════════════════════════════════════════════════════════════
-                      METRICS COMPARISON
-═══════════════════════════════════════════════════════════════════════
-
-------------------------------------------------------------------------
-Metric                               MESH      RICOBIT        TORUS
-------------------------------------------------------------------------
-Nodes                                  64          126           64
-Packets Injected                      100          100          100
-Packets Delivered                     100          100          100
-Delivery Rate (%)                   100.0        100.0        100.0
-Total Cycles                           35           44           29
-Avg Latency (cycles)                35.00        18.24        29.00
-Min Latency                            35            1           29
-Max Latency                            35           43           29
-Throughput (pkt/cycle)             2.8571       2.2727       3.4483
-Avg Hops (RiCoBiT only)              5.73         5.81         0.00
-Packet Speed (1/latency)           0.0286       0.0548       0.0345
-------------------------------------------------------------------------
-
-
+For questions or support, please open an issue on the GitHub repository.

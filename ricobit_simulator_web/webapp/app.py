@@ -9,8 +9,8 @@ from typing import Dict, Iterable, List, Tuple
 
 from flask import Flask, jsonify, render_template, request, send_from_directory
 
-from ..simulation.simulator import Simulator
-from ..topology.ricobit_topology import RiCoBiT_Topology
+from simulation.simulator import Simulator
+from topology.ricobit_topology import RiCoBiT_Topology
 
 NodeAddress = Tuple[int, int]
 
